@@ -1,0 +1,23 @@
+// Observes the frontend JVM's TCP send/recv with tid / comm / ports.
+// Usage: sudo bpftrace threadmap.bt <frontend_host_pid>
+#include <net/sock.h>
+
+kprobe:tcp_recvmsg
+/pid == $1/
+{
+    $sk = (struct sock *)arg0;
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = (($dport & 0xff) << 8) | ($dport >> 8);
+    printf("RECV tid=%d comm=%-16s lport=%d dport=%d\n", tid, comm, $lport, $dport);
+}
+
+kprobe:tcp_sendmsg
+/pid == $1/
+{
+    $sk = (struct sock *)arg0;
+    $lport = $sk->__sk_common.skc_num;
+    $dport = $sk->__sk_common.skc_dport;
+    $dport = (($dport & 0xff) << 8) | ($dport >> 8);
+    printf("SEND tid=%d comm=%-16s lport=%d dport=%d\n", tid, comm, $lport, $dport);
+}

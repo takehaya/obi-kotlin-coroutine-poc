@@ -1,0 +1,56 @@
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"   # UI / API
+      - "4318:4318"     # OTLP HTTP (OBI reaches it from the host network)
+    networks: [expnet]
+
+  backend:
+    image: eclipse-temurin:21-jre
+    volumes:
+      - ./backend/build/install/backend:/app:ro
+    command: ["/app/bin/backend"]
+    networks: [expnet]
+
+  frontend:
+    image: eclipse-temurin:21-jre
+    environment:
+      BACKEND_URL: http://backend:8081
+      # Attach the coroutine agent by setting FRONTEND_JAVA_OPTS, e.g.:
+      #   FRONTEND_JAVA_OPTS="-javaagent:/coroagent/coroagent.jar -Dobicoro.native=/coroagent/libcoroagent.so"
+      # Leave it empty to reproduce the baseline (broken traces).
+      JAVA_OPTS: "${FRONTEND_JAVA_OPTS:-}"
+      OBICORO_DEBUG: "${OBICORO_DEBUG:-}"
+      # KTOR_ENGINE=cio switches the frontend server engine from Netty to CIO.
+      KTOR_ENGINE: "${KTOR_ENGINE:-}"
+    volumes:
+      - ./frontend/build/install/frontend:/app:ro
+      - ../agent/dist:/coroagent:ro
+    command: ["/app/bin/frontend"]
+    ports:
+      - "8080:8080"
+    networks: [expnet]
+
+  jfront:
+    image: eclipse-temurin:21-jre
+    environment:
+      BACKEND_URL: http://backend:8081
+    volumes:
+      - ./jfront/build/install/jfront:/app:ro
+    command: ["/app/bin/jfront"]
+    ports:
+      - "8082:8082"
+    networks: [expnet]
+
+  obi:
+    image: otel/ebpf-instrument:v0.10.0
+    privileged: true
+    pid: "host"
+    network_mode: "host"   # attach TC in the host netns, reach Jaeger via localhost:4318
+    volumes:
+      - ./obi-config.yml:/config/obi-config.yml:ro
+    command: ["-config", "/config/obi-config.yml"]
+
+networks:
+  expnet: {}

@@ -1,0 +1,22 @@
+# OBI v0.10.0 configuration.
+# Reference: devdocs/config/CONFIG.md at the v0.10.0 tag.
+discovery:
+  instrument:
+    - open_ports: 8080
+      name: frontend
+    - open_ports: 8081
+      name: backend
+    - open_ports: 8082
+      name: jfront
+
+ebpf:
+  # Enable all distributed-trace context propagation mechanisms ("headers,tcp").
+  context_propagation: all
+
+otel_traces_export:
+  endpoint: http://localhost:4318
+  protocol: http/protobuf
+
+# Debug aid: print generated spans to stdout as well.
+trace_printer: text
+log_level: info
