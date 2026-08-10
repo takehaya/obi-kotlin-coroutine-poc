@@ -36,6 +36,8 @@ services:
     image: eclipse-temurin:21-jre
     environment:
       BACKEND_URL: http://backend:8081
+      # JFRONT_EXECUTOR=virtual switches to a virtual-thread-per-task executor
+      JFRONT_EXECUTOR: "${JFRONT_EXECUTOR:-}"
     volumes:
       - ./jfront/build/install/jfront:/app:ro
     command: ["/app/bin/jfront"]

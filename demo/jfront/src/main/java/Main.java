@@ -13,7 +13,12 @@ public class Main {
     public static void main(String[] args) throws Exception {
         String backend = System.getenv().getOrDefault("BACKEND_URL", "http://localhost:8081");
         HttpServer server = HttpServer.create(new InetSocketAddress(8082), 0);
-        server.setExecutor(Executors.newFixedThreadPool(8));
+        // JFRONT_EXECUTOR=virtual runs each request on a JDK 21 virtual thread,
+        // to compare OBI's virtual-thread correlation against coroutines.
+        server.setExecutor(
+            "virtual".equals(System.getenv("JFRONT_EXECUTOR"))
+                ? Executors.newVirtualThreadPerTaskExecutor()
+                : Executors.newFixedThreadPool(8));
         server.createContext("/call", exchange -> {
             HttpURLConnection conn = (HttpURLConnection) URI.create(backend + "/work").toURL().openConnection();
             String body;

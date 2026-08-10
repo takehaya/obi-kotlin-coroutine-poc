@@ -28,7 +28,7 @@ A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines mas
 |---|---|---|
 | Netty engine, sequential `/direct`, `/hop` | 0/10 | **10/10** (client span correctly parented) |
 | Netty engine, sequential `/parallel` (both calls) | 0/10 | **10/10** |
-| CIO engine, sequential, all three endpoints | 0/10 | **10/10** |
+| CIO engine, sequential, all three endpoints | 2–3/10 (coincidental thread reuse) | **10/10** |
 | concurrency 16, `/direct` (200 req) | 0 | **156/200**, zero orphaned client spans |
 | concurrency 16, `/hop` (200 req) | 0 | 30/200 |
 | concurrency 8, `/parallel` (100 req) | 0 | 15/100 |
@@ -38,6 +38,8 @@ The concurrent `/hop` / `/parallel` residue is structural: the CIO client's conn
 ## Reproduction
 
 Requirements: Linux kernel 5.8+ with BTF, Docker (compose v2), JDK 21 (with JNI headers), gcc, python3. OBI runs privileged.
+
+Prefer a guided tour? [PLAYGROUND.md](PLAYGROUND.md) walks through a 10-minute baseline-vs-agent comparison of the same steps, with `make` shortcuts for each command.
 
 ```bash
 # 1. Build everything (services, agent jars, JNI lib)
