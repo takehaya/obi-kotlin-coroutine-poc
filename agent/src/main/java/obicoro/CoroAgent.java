@@ -68,11 +68,17 @@ public final class CoroAgent {
                                 .and(not(isAbstract())))))
         // Connection scope: Netty socket reads (brackets the recv syscall and the inline part of
         // request handling with the channel id, which keys the server-span insert).
+        // The NIO and epoll transports are both covered; io_uring and KQueue are not.
         .type(named("io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe"))
         .transform(
             (builder, type, cl, module, pd) ->
                 builder.visit(
                     Advice.to(NettyRead.class).on(named("read").and(takesArguments(0)))))
+        .type(named("io.netty.channel.epoll.AbstractEpollStreamChannel$EpollStreamUnsafe"))
+        .transform(
+            (builder, type, cl, module, pd) ->
+                builder.visit(
+                    Advice.to(NettyRead.class).on(named("epollInReady").and(takesArguments(0)))))
         // Connection scope: Netty inbound handler entry (channelRead). The hop between event-loop
         // groups goes through a hidden-class lambda that cannot be instrumented, so the receiving
         // side recovers the id from ctx.channel(). Ktor's NettyApplicationCallHandler launches the

@@ -18,7 +18,7 @@ The result, measured with the demo in this repo (OBI v0.10.0, Ktor 3.2.2, plaint
 A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines masquerade as virtual threads, using OBI's **existing** ioctl control channel (`k_ioctl_java_vt_mount` / `unmount`). OBI itself is unmodified; the ioctl kprobe accepts the ops because the process is already an instrumented target.
 
 - **Lineage id**: identity hash of the incoming connection object.
-- **Scopes** (where an id enters a thread): Netty `NioByteUnsafe.read` (brackets the recv syscall, keying the server-span insert), inbound handlers' `channelRead` (the cross-event-loop handoff is a hidden-class lambda and cannot be instrumented, so the receiving side recovers the id from `ctx.channel()`), and ktor-network `NIOSocketImpl.attachFor*Impl` with preserve-or-seed semantics (which also covers the CIO server engine).
+- **Scopes** (where an id enters a thread): Netty `NioByteUnsafe.read` / `EpollStreamUnsafe.epollInReady` (bracket the recv syscall, keying the server-span insert; the NIO and epoll transports are covered, io_uring and KQueue are not), inbound handlers' `channelRead` (the cross-event-loop handoff is a hidden-class lambda and cannot be instrumented, so the receiving side recovers the id from `ctx.channel()`), and ktor-network `NIOSocketImpl.attachFor*Impl` with preserve-or-seed semantics (which also covers the CIO server engine).
 - **Carry**: constructors of kotlinx/ktor `Runnable`s and `CoroutineDispatcher.dispatch` stamp the current id onto the task.
 - **Apply**: task `run()` entry mounts the id, exit restores the previous state — no state ever lingers on a thread.
 
@@ -61,6 +61,9 @@ python3 analyze_concurrent.py results-concurrent
 
 # CIO server engine variant
 KTOR_ENGINE=cio FRONTEND_JAVA_OPTS="..." sudo -E docker compose up -d --force-recreate frontend
+
+# Netty epoll transport variant (default is NIO)
+NETTY_TRANSPORT=epoll FRONTEND_JAVA_OPTS="..." sudo -E docker compose up -d --force-recreate frontend
 ```
 
 Traces are also browsable in the Jaeger UI at http://localhost:16686 (compare service `frontend` with the control `jfront`). `OBICORO_DEBUG=1` makes the agent log mounts/stamps to stderr.
@@ -77,7 +80,7 @@ demo/    4-service topology (compose), OBI config, load & analysis scripts
 This is a proof of concept, not a production agent.
 
 - Concurrent traffic multiplexed over pooled client connections cannot be fully attributed (see above); a small rate of mis-parented client spans remains under load.
-- Scope hooks cover Ktor's Netty and CIO engines and the CIO client. Other engines/clients need their own scope hooks.
+- Scope hooks cover Ktor's Netty and CIO engines and the CIO client. On Netty only the NIO and epoll transports are hooked; io_uring and KQueue are not. Other engines/clients/transports need their own scope hooks.
 - The lineage id (31-bit identity hash) can collide in principle.
 - Tied to OBI v0.10.0's ioctl ABI.
 

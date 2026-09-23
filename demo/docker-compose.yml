@@ -24,6 +24,8 @@ services:
       OBICORO_DEBUG: "${OBICORO_DEBUG:-}"
       # KTOR_ENGINE=cio switches the frontend server engine from Netty to CIO.
       KTOR_ENGINE: "${KTOR_ENGINE:-}"
+      # NETTY_TRANSPORT=epoll switches Netty from the NIO transport to native epoll.
+      NETTY_TRANSPORT: "${NETTY_TRANSPORT:-}"
     volumes:
       - ./frontend/build/install/frontend:/app:ro
       - ../agent/dist:/coroagent:ro
