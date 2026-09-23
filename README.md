@@ -18,7 +18,7 @@ The result, measured with the demo in this repo (OBI v0.10.0, Ktor 3.2.2, plaint
 A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines masquerade as virtual threads, using OBI's **existing** ioctl control channel (`k_ioctl_java_vt_mount` / `unmount`). OBI itself is unmodified; the ioctl kprobe accepts the ops because the process is already an instrumented target.
 
 - **Lineage id**: identity hash of the incoming connection object.
-- **Scopes** (where an id enters a thread): Netty `NioByteUnsafe.read` / `EpollStreamUnsafe.epollInReady` (bracket the recv syscall, keying the server-span insert; the NIO and epoll transports are covered, io_uring and KQueue are not), inbound handlers' `channelRead` (the cross-event-loop handoff is a hidden-class lambda and cannot be instrumented, so the receiving side recovers the id from `ctx.channel()`), and ktor-network `NIOSocketImpl.attachFor*Impl` with preserve-or-seed semantics (which also covers the CIO server engine).
+- **Scopes** (where an id enters a thread): Netty `NioByteUnsafe.read` / `EpollStreamUnsafe.epollInReady` (bracket the recv syscall, keying the server-span insert; the NIO and epoll transports are covered, io_uring and KQueue are not), inbound handlers' `channelRead` (the cross-event-loop handoff is a hidden-class lambda and cannot be instrumented, so the receiving side recovers the id from `ctx.channel()`), ktor-network `NIOSocketImpl.attachFor*Impl` with preserve-or-seed semantics, and the CIO server's `startServerConnectionPipeline`, which launches a connection's request pipeline from the accept loop and gets the id its socket was attached under.
 - **Carry**: constructors of kotlinx/ktor `Runnable`s stamp the current id onto the task, once. A coroutine belongs to the request that launched it; re-stamping on dispatch would hand it the id of whichever request's thread happened to wake it.
 - **Apply**: task `run()` entry mounts the id, exit restores the previous state — no state ever lingers on a thread.
 
@@ -26,19 +26,17 @@ A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines mas
 
 | Condition | baseline | PoC |
 |---|---|---|
-| Netty engine (NIO), sequential `/direct`, `/hop` | 0/10 | **10/10** (client span correctly parented) |
-| Netty engine (NIO), sequential `/parallel` (both calls) | 0/10 | **10/10** |
-| Netty engine (epoll transport), sequential, all three endpoints | 0/10 | **10/10** |
-| CIO engine, sequential, all three endpoints | 3/10 (coincidental thread reuse) | **10/10** |
-| concurrency 16, `/direct` (200 req) | 0 | **136/200**, zero orphaned client spans |
-| concurrency 16, `/hop` (200 req) | 0 | 47/200 |
-| concurrency 8, `/parallel` (100 req) | 0 | 37/100 |
+| Netty engine (NIO), sequential `/direct`, `/hop`, `/parallel` | 0/10 | **10/10** (client span correctly parented) |
+| Netty engine (epoll transport), sequential, same three endpoints | 0/10 | **10/10** |
+| CIO engine, sequential, same three endpoints | 3/10 (coincidental thread reuse) | **10/10** |
+| keep-alive (10 requests over one connection), NIO and CIO | 0/10 | **10/10** |
+| concurrency 16, `/direct` (200 req), NIO / CIO / epoll | 0 | **200/200** |
+| concurrency 16, `/hop` (200 req), NIO / CIO / epoll | 0 | **200/200** |
+| concurrency 8, `/parallel` (100 req), NIO / CIO / epoll | 0 | **100/100** |
 
-Controls under the same OBI, agent not involved: the thread-per-request plain-Java service connects 10/10, and so does the same service on a virtual-thread-per-task executor (OBI's own virtual-thread support, `make up-vt`).
+The concurrent rows held in three runs each on NIO and CIO and one on epoll, with no mis-parented client span in any of them. Controls under the same OBI, agent not involved: the thread-per-request plain-Java service connects 10/10, and so does the same service on a virtual-thread-per-task executor (OBI's own virtual-thread support, `make up-vt`). The analyzer output behind every row is in [`demo/reference-results/`](demo/reference-results/).
 
-The concurrent rows are a single run; three runs of the agent (July and September 2026) ranged 136–156 for `/direct`, 19–47 for `/hop` and 15–37 for `/parallel`. The analyzer output behind every row is in [`demo/reference-results/`](demo/reference-results/).
-
-The concurrent `/hop` / `/parallel` residue is structural: the CIO client's connection pool uses a long-lived per-connection writer coroutine whose single `run()` drains writes for multiple requests, and a per-thread, per-instant mount can only name one request for the whole slice. Fixing that requires correlation state keyed by logical task (continuation) — which is the upstream proposal, and the same shape OBI already uses for Python asyncio.
+Earlier versions of this README reported a concurrent residue (136–156/200 on `/direct`, 19–47/200 on `/hop`) and blamed the CIO client's connection pool. That was wrong: by default the CIO client opens one connection per call (`pipelining` is off), and a bpftrace count of `tcp_v4_connect` matched the number of backend calls. The residue came from the agent re-stamping tasks on `CoroutineDispatcher.dispatch` with whichever request's id the waking thread held, and on CIO from scheduler plumbing (`LimitedDispatcher$Worker`) carrying the first request's id forever.
 
 ### Overhead
 
@@ -102,7 +100,8 @@ demo/    4-service topology (compose), OBI config, load & analysis scripts
 
 This is a proof of concept, not a production agent.
 
-- Concurrent traffic multiplexed over pooled client connections cannot be fully attributed (see above); a small rate of mis-parented client spans remains under load.
+- Requests that genuinely share a connection concurrently (HTTP pipelining, HTTP/2 streams) are unmeasured. A per-thread mount names one request at a time, so a single `run()` that serves several requests at once cannot be attributed; this is the case the upstream proposal (state keyed by logical task) is for. The demo could not exercise it: CIO client pipelining against the Netty backend fails for about 3 in 4 requests even without OBI or the agent.
+- A coroutine carries the id of the request it was launched in. A long-lived coroutine launched inside one request and later reused by others (a connection pool's I/O coroutine, an app-scoped worker started lazily) would keep the first request's id.
 - Scope hooks cover Ktor's Netty and CIO engines and the CIO client. On Netty only the NIO and epoll transports are hooked; io_uring and KQueue are not. Other engines/clients/transports need their own scope hooks.
 - The lineage id (31-bit identity hash) can collide in principle.
 - Tied to OBI v0.10.0's ioctl ABI.

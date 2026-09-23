@@ -9,5 +9,4 @@
    10 traces: ['backend/server:GET /work', 'frontend/client:GET /work', 'frontend/internal:in queue', 'frontend/internal:processing', 'frontend/server:GET /parallel']
 
 ===== condition: java =====
-    9 traces: ['backend/server:GET /work', 'jfront/client:GET /work', 'jfront/internal:in queue', 'jfront/internal:processing', 'jfront/server:GET /call']
-    1 traces: ['jfront/internal:in queue', 'jfront/internal:processing', 'jfront/server:GET /call']
+   10 traces: ['backend/server:GET /work', 'jfront/client:GET /work', 'jfront/internal:in queue', 'jfront/internal:processing', 'jfront/server:GET /call']
