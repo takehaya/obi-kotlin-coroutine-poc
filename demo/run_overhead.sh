@@ -51,9 +51,6 @@ run() {
         --requests "$WARMUP" --concurrency "$CONCURRENCY" --warmup 0 > /dev/null || true
 
     pid=$(sudo docker inspect -f '{{.State.Pid}}' "$(sudo docker compose ps -q frontend)")
-    t0=$(cpu_ticks "$pid")
-    start_ns=$(date +%s%N)
-
     bt_out=$(mktemp)
     # BPFTRACE may be an AppImage plus flags, so it is deliberately word-split.
     sudo $BPFTRACE -e 'tracepoint:syscalls:sys_enter_ioctl /pid == '"$pid"'/ { @ioctl = count(); }' \
@@ -61,9 +58,14 @@ run() {
     bt_pid=$!
     sleep 2   # give bpftrace time to attach before the load starts
 
+    # The CPU window brackets the load only, not the bpftrace attach/detach waits.
+    t0=$(cpu_ticks "$pid")
+    start_ns=$(date +%s%N)
     json=$(python3 loadgen.py "http://localhost:8080/$ep" \
         --requests "$REQUESTS" --concurrency "$CONCURRENCY" --warmup 0) \
         || echo "warning: loadgen exited non-zero for $ep (over 1% errors)" >&2
+    end_ns=$(date +%s%N)
+    t1=$(cpu_ticks "$pid")
 
     if stop_bpftrace "$bt_pid"; then
         wait "$bt_pid" 2>/dev/null || true
@@ -71,8 +73,6 @@ run() {
         echo "warning: bpftrace was no longer running for $ep" >&2
     fi
 
-    end_ns=$(date +%s%N)
-    t1=$(cpu_ticks "$pid")
     cpu=$(awk -v d="$((t1 - t0))" -v ns="$((end_ns - start_ns))" -v hz="$HZ" \
         'BEGIN { printf("%.3f", ns > 0 ? (d / hz) / (ns / 1000000000) : 0) }')
 

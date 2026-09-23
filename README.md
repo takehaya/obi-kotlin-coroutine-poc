@@ -42,14 +42,16 @@ The concurrent `/hop` / `/parallel` residue is structural: the CIO client's conn
 
 ### Overhead
 
-`demo/run_overhead.sh` drives one endpoint at concurrency 16 (4000 requests after a 300-request warm-up, Netty NIO) with and without the agent, and records latency percentiles, the frontend JVM's CPU time and the `ioctl` syscalls it made. Round 2 of 2 (round 1 is in `demo/reference-results/`):
+`demo/run_overhead.sh` drives `/direct` and `/hop` in turn at concurrency 16 (4000 requests each after a 300-request warm-up, Netty NIO) with and without the agent, and records latency percentiles, the frontend JVM's CPU time during the load and the `ioctl` syscalls it made. Two rounds:
 
-| endpoint | p50 off → on | p99 off → on | req/s off → on | JVM CPU (cores) off → on | ioctl per request off → on |
+| endpoint, round | p50 off → on | p99 off → on | req/s off → on | JVM CPU (cores) off → on | ioctl per request off → on |
 |---|---|---|---|---|---|
-| `/direct` | 27.0 → 26.5 ms | 43.5 → 38.2 ms | 570 → 584 | 5.48 → 5.54 | 7.0 → 74.7 |
-| `/hop` | 55.9 → 55.3 ms | 61.8 → 65.5 ms | 284 → 286 | 2.35 → 2.37 | 7.0 → 82.6 |
+| `/direct`, 1 | 25.7 → 26.2 ms | 40.6 → 43.3 ms | 598 → 586 | 7.27 → 7.74 | 7.0 → 74.6 |
+| `/direct`, 2 | 27.8 → 24.6 ms | 38.5 → 47.3 ms | 559 → 625 | 6.77 → 6.29 | 7.0 → 74.7 |
+| `/hop`, 1 | 54.5 → 55.2 ms | 63.3 → 65.3 ms | 289 → 284 | 2.16 → 2.57 | 7.0 → 83.3 |
+| `/hop`, 2 | 56.0 → 54.9 ms | 71.1 → 65.9 ms | 281 → 285 | 2.39 → 2.67 | 7.0 → 83.5 |
 
-Latency and throughput differences are within run-to-run noise in both rounds. JVM CPU is too noisy on this host to resolve a difference: round 2 shows about +1%, while round 1's agent-off `/direct` run read 3.4 cores against 5.5 in every other run. The measurable cost is about 70 extra `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The 7 per request without the agent are made by the JVM with OBI attached; their source was not investigated.
+Latency and throughput differences change sign between rounds, so they are within run-to-run noise. `/hop` costs 12–19% more JVM CPU with the agent in both rounds; on `/direct` the CPU difference is below the noise. The agent adds about 70 `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The 7 per request without the agent are made by the JVM with OBI attached; their source was not investigated.
 
 ## Reproduction
 
