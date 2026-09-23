@@ -28,12 +28,20 @@ public final class CoroAgent {
     // be visible from every class loader: append them to the bootstrap search path.
     // Appending the fat jar would double-load ByteBuddy (bootstrap + app loader) and fail with a
     // LinkageError, hence the separate boot jar with just Track / Native.
-    String bootJar = System.getProperty("obicoro.bootjar", "/coroagent/coroagent-boot.jar");
-    inst.appendToBootstrapClassLoaderSearch(new JarFile(bootJar));
+    try {
+      String bootJar = System.getProperty("obicoro.bootjar", "/coroagent/coroagent-boot.jar");
+      inst.appendToBootstrapClassLoaderSearch(new JarFile(bootJar));
 
-    String nativePath = System.getProperty("obicoro.native", "/coroagent/libcoroagent.so");
-    boolean dbg = System.getenv("OBICORO_DEBUG") != null;
-    Track.init(nativePath, dbg);
+      String nativePath = System.getProperty("obicoro.native", "/coroagent/libcoroagent.so");
+      boolean dbg = System.getenv("OBICORO_DEBUG") != null;
+      Track.init(nativePath, dbg);
+    } catch (Throwable t) {
+      // A missing boot jar (IOException) or native library (UnsatisfiedLinkError) must not abort
+      // JVM startup. Install no instrumentation either: the advice would then call Native.* and
+      // hit the same failure on every instrumented method.
+      System.err.println("[obicoro] agent disabled, running without coroutine correlation: " + t);
+      return;
+    }
 
     new AgentBuilder.Default()
         .disableClassFormatChanges()
