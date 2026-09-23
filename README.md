@@ -26,14 +26,30 @@ A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines mas
 
 | Condition | baseline | PoC |
 |---|---|---|
-| Netty engine, sequential `/direct`, `/hop` | 0/10 | **10/10** (client span correctly parented) |
-| Netty engine, sequential `/parallel` (both calls) | 0/10 | **10/10** |
-| CIO engine, sequential, all three endpoints | 2–3/10 (coincidental thread reuse) | **10/10** |
-| concurrency 16, `/direct` (200 req) | 0 | **156/200**, zero orphaned client spans |
-| concurrency 16, `/hop` (200 req) | 0 | 30/200 |
-| concurrency 8, `/parallel` (100 req) | 0 | 15/100 |
+| Netty engine (NIO), sequential `/direct`, `/hop` | 0/10 | **10/10** (client span correctly parented) |
+| Netty engine (NIO), sequential `/parallel` (both calls) | 0/10 | **10/10** |
+| Netty engine (epoll transport), sequential, all three endpoints | 0/10 | **10/10** |
+| CIO engine, sequential, all three endpoints | 3/10 (coincidental thread reuse) | **10/10** |
+| concurrency 16, `/direct` (200 req) | 0 | **136/200**, zero orphaned client spans |
+| concurrency 16, `/hop` (200 req) | 0 | 47/200 |
+| concurrency 8, `/parallel` (100 req) | 0 | 37/100 |
+
+Controls under the same OBI, agent not involved: the thread-per-request plain-Java service connects 10/10, and so does the same service on a virtual-thread-per-task executor (OBI's own virtual-thread support, `make up-vt`).
+
+The concurrent rows are a single run; three runs of the agent (July and September 2026) ranged 136–156 for `/direct`, 19–47 for `/hop` and 15–37 for `/parallel`. The analyzer output behind every row is in [`demo/reference-results/`](demo/reference-results/).
 
 The concurrent `/hop` / `/parallel` residue is structural: the CIO client's connection pool uses a long-lived per-connection writer coroutine whose single `run()` drains writes for multiple requests, and a per-thread, per-instant mount can only name one request for the whole slice. Fixing that requires correlation state keyed by logical task (continuation) — which is the upstream proposal, and the same shape OBI already uses for Python asyncio.
+
+### Overhead
+
+`demo/run_overhead.sh` drives one endpoint at concurrency 16 (4000 requests after a 300-request warm-up, Netty NIO) with and without the agent, and records latency percentiles, the frontend JVM's CPU time and the `ioctl` syscalls it made. Round 2 of 2 (round 1 is in `demo/reference-results/`):
+
+| endpoint | p50 off → on | p99 off → on | req/s off → on | JVM CPU (cores) off → on | ioctl per request off → on |
+|---|---|---|---|---|---|
+| `/direct` | 27.0 → 26.5 ms | 43.5 → 38.2 ms | 570 → 584 | 5.48 → 5.54 | 7.0 → 74.7 |
+| `/hop` | 55.9 → 55.3 ms | 61.8 → 65.5 ms | 284 → 286 | 2.35 → 2.37 | 7.0 → 82.6 |
+
+Latency and throughput differences are within run-to-run noise in both rounds. JVM CPU is too noisy on this host to resolve a difference: round 2 shows about +1%, while round 1's agent-off `/direct` run read 3.4 cores against 5.5 in every other run. The measurable cost is about 70 extra `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The 7 per request without the agent are made by the JVM with OBI attached; their source was not investigated.
 
 ## Reproduction
 
@@ -68,6 +84,8 @@ Variants are switched with an environment variable on the `up` line (e.g. `KTOR_
 - `OBICORO_DEBUG=1` — agent debug logging, see below.
 
 The load and analysis steps have shortcuts too: `make load RESULTS=<dir>` / `make analyze RESULTS=<dir>`, and `make load-concurrent` / `make analyze-concurrent`.
+
+Overhead: start the stack without the agent (`make up-baseline`), run `demo/run_overhead.sh results-overhead agent-off`, restart with the agent (`make up`), run the same script with `agent-on`, then `python3 demo/summarize_overhead.py results-overhead`. It needs `bpftrace` on the PATH (or `BPFTRACE=...`) for the ioctl count.
 
 Traces are also browsable in the Jaeger UI at http://localhost:16686 (compare service `frontend` with the control `jfront`). `OBICORO_DEBUG=1` makes the agent log mounts/stamps to stderr, plus one `transformed <class>` line for every class it instruments (useful to check a hook still matches after a Netty/Ktor upgrade). Transformation errors are always logged, with or without the variable.
 

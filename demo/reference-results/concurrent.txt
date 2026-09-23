@@ -1,0 +1,15 @@
+===== direct =====
+  traces in window: 200 (total server spans: 200)
+  fully connected (server+client+backend): 136
+  server orphans: 64, client orphans: 0, other: 0
+  anomalies: multi_server=0, extra_clients=5, timing=0
+===== hop =====
+  traces in window: 200 (total server spans: 200)
+  fully connected (server+client+backend): 47
+  server orphans: 153, client orphans: 0, other: 0
+  anomalies: multi_server=0, extra_clients=11, timing=0
+===== parallel =====
+  traces in window: 100 (total server spans: 100)
+  fully connected (server+client+backend): 37
+  server orphans: 63, client orphans: 0, other: 0
+  anomalies: multi_server=0, extra_clients=10, timing=0
