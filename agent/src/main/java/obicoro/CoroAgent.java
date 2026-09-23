@@ -13,6 +13,9 @@ import java.lang.instrument.Instrumentation;
 import java.util.jar.JarFile;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
+import net.bytebuddy.description.type.TypeDescription;
+import net.bytebuddy.dynamic.DynamicType;
+import net.bytebuddy.utility.JavaModule;
 
 /**
  * Experimental agent that carries a per-request lineage id along the kotlinx.coroutines / Ktor
@@ -24,6 +27,7 @@ public final class CoroAgent {
   private CoroAgent() {}
 
   public static void premain(String args, Instrumentation inst) throws Exception {
+    boolean dbg = System.getenv("OBICORO_DEBUG") != null;
     // Advice code is inlined into target classes, so the referenced Track / Native classes must
     // be visible from every class loader: append them to the bootstrap search path.
     // Appending the fat jar would double-load ByteBuddy (bootstrap + app loader) and fail with a
@@ -33,7 +37,6 @@ public final class CoroAgent {
       inst.appendToBootstrapClassLoaderSearch(new JarFile(bootJar));
 
       String nativePath = System.getProperty("obicoro.native", "/coroagent/libcoroagent.so");
-      boolean dbg = System.getenv("OBICORO_DEBUG") != null;
       Track.init(nativePath, dbg);
     } catch (Throwable t) {
       // A missing boot jar (IOException) or native library (UnsatisfiedLinkError) must not abort
@@ -48,6 +51,32 @@ public final class CoroAgent {
         .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
         .with(AgentBuilder.InitializationStrategy.NoOp.INSTANCE)
         .with(AgentBuilder.TypeStrategy.Default.REDEFINE)
+        // Without a listener a hook that matches nothing (a renamed class after a Netty/Ktor
+        // upgrade, an uncovered transport) is silent and only shows up as broken traces.
+        .with(
+            new AgentBuilder.Listener.Adapter() {
+              @Override
+              public void onTransformation(
+                  TypeDescription typeDescription,
+                  ClassLoader classLoader,
+                  JavaModule module,
+                  boolean loaded,
+                  DynamicType dynamicType) {
+                if (dbg) {
+                  System.err.println("[obicoro] transformed " + typeDescription.getName());
+                }
+              }
+
+              @Override
+              public void onError(
+                  String typeName,
+                  ClassLoader classLoader,
+                  JavaModule module,
+                  boolean loaded,
+                  Throwable throwable) {
+                System.err.println("[obicoro] transform error on " + typeName + ": " + throwable);
+              }
+            })
         // Task creation and execution: kotlinx.coroutines / Ktor Runnables.
         // io.netty Runnables are deliberately NOT included: instrumenting event-loop bodies
         // (run() methods that never return) leaves stale mounts on threads and poisons every

@@ -66,7 +66,7 @@ KTOR_ENGINE=cio FRONTEND_JAVA_OPTS="..." sudo -E docker compose up -d --force-re
 NETTY_TRANSPORT=epoll FRONTEND_JAVA_OPTS="..." sudo -E docker compose up -d --force-recreate frontend
 ```
 
-Traces are also browsable in the Jaeger UI at http://localhost:16686 (compare service `frontend` with the control `jfront`). `OBICORO_DEBUG=1` makes the agent log mounts/stamps to stderr.
+Traces are also browsable in the Jaeger UI at http://localhost:16686 (compare service `frontend` with the control `jfront`). `OBICORO_DEBUG=1` makes the agent log mounts/stamps to stderr, plus one `transformed <class>` line for every class it instruments (useful to check a hook still matches after a Netty/Ktor upgrade). Transformation errors are always logged, with or without the variable.
 
 ## Layout
 
