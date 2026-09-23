@@ -22,8 +22,8 @@ run direct   http://localhost:8080/direct   200 16
 run hop      http://localhost:8080/hop      200 16
 run parallel http://localhost:8080/parallel 100 8
 
-echo "waiting for OBI batch flush (25s)..."
-sleep 25
+echo "waiting for OBI batch flush (45s)..."
+sleep 45
 
 for svc in frontend backend; do
     curl -s "http://localhost:16686/api/traces?service=$svc&limit=2000&lookback=1h" > "$OUT/jaeger_$svc.json"
