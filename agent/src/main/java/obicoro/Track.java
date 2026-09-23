@@ -125,11 +125,58 @@ public final class Track {
 
   // ---- connection scopes (Netty reads / handler invocations, ktor-network socket attach) ----
 
-  /** Connection scope entry with preserve-or-seed. Returns the previous id. */
-  public static long scopeEnter(Object channelLike) {
+  /**
+   * byte channel -> lineage id of the socket it was attached to, so the CIO server can recover the
+   * connection's id when it starts the request pipeline (see scopeEnterConnection).
+   */
+  private static final Map<Object, Long> channelLineage =
+      Collections.synchronizedMap(new WeakHashMap<Object, Long>());
+
+  /**
+   * ktor-network socket attach with preserve-or-seed. Returns the previous id. The attached channel
+   * is remembered with the id it was read / written under.
+   */
+  public static long scopeEnter(Object socket, Object channel) {
     long prev = activeId.get()[0];
-    long id = prev != 0 ? prev : channelId(channelLike);
-    setActive(id, prev, "scope:" + channelLike.getClass().getSimpleName());
+    long id = prev != 0 ? prev : channelId(socket);
+    if (channel != null) {
+      channelLineage.put(channel, id);
+    }
+    setActive(id, prev, "scope:" + socket.getClass().getSimpleName());
+    return prev;
+  }
+
+  /** Per-class cache of the getInput() method (for the CIO server's ServerIncomingConnection). */
+  private static final ClassValue<java.lang.reflect.Method> INPUT_OF =
+      new ClassValue<java.lang.reflect.Method>() {
+        @Override
+        protected java.lang.reflect.Method computeValue(Class<?> type) {
+          try {
+            java.lang.reflect.Method m = type.getMethod("getInput");
+            m.setAccessible(true);
+            return m;
+          } catch (Throwable t) {
+            return null;
+          }
+        }
+      };
+
+  /**
+   * CIO server: startServerConnectionPipeline runs in the accept loop, which belongs to no request,
+   * and launches the coroutine that handles every request of the connection. Mount the id the
+   * connection's input channel was attached under, so that coroutine is born with it.
+   */
+  public static long scopeEnterConnection(Object connection) {
+    long prev = activeId.get()[0];
+    try {
+      java.lang.reflect.Method m = INPUT_OF.get(connection.getClass());
+      Long id = m != null ? channelLineage.get(m.invoke(connection)) : null;
+      if (id != null) {
+        setActive(id, prev, "cio-conn");
+      }
+    } catch (Throwable t) {
+      // leave the thread as it was
+    }
     return prev;
   }
 

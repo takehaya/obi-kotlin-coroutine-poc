@@ -48,8 +48,9 @@ public final class CoroAgent {
       return;
     }
 
-    // Type validation rejects Kotlin classes whose members are named after Java keywords, e.g.
-    // DefaultIoScheduler (Dispatchers.IO) has a field literally named "default".
+    // Type validation applies Java's naming rules and rejects ordinary Kotlin bytecode: mangled
+    // names such as ServerPipelineKt.startServerConnectionPipeline-exY8QGI, or members named after
+    // Java keywords (DefaultIoScheduler has a field called "default").
     new AgentBuilder.Default(new ByteBuddy().with(TypeValidation.DISABLED))
         .disableClassFormatChanges()
         .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
@@ -138,6 +139,14 @@ public final class CoroAgent {
                 builder.visit(
                     Advice.to(SocketAttach.class)
                         .on(named("attachForReadingImpl").or(named("attachForWritingImpl")))))
+        // Connection scope: the CIO server starts each connection's request pipeline from the accept
+        // loop; give it the id the connection's socket was attached under.
+        .type(named("io.ktor.server.cio.backend.ServerPipelineKt"))
+        .transform(
+            (builder, type, cl, module, pd) ->
+                builder.visit(
+                    Advice.to(CioPipeline.class)
+                        .on(nameStartsWith("startServerConnectionPipeline"))))
         .installOn(inst);
 
     System.err.println("[obicoro] agent installed");
@@ -191,10 +200,23 @@ public final class CoroAgent {
   }
 
   @SuppressWarnings("unused")
+  public static final class CioPipeline {
+    @Advice.OnMethodEnter(suppress = Throwable.class)
+    public static long enter(@Advice.Argument(1) Object connection) {
+      return Track.scopeEnterConnection(connection);
+    }
+
+    @Advice.OnMethodExit(suppress = Throwable.class, onThrowable = Throwable.class)
+    public static void exit(@Advice.Enter long prev) {
+      Track.scopeExit(prev);
+    }
+  }
+
+  @SuppressWarnings("unused")
   public static final class SocketAttach {
     @Advice.OnMethodEnter(suppress = Throwable.class)
-    public static long enter(@Advice.This Object socket) {
-      return Track.scopeEnter(socket);
+    public static long enter(@Advice.This Object socket, @Advice.Argument(0) Object channel) {
+      return Track.scopeEnter(socket, channel);
     }
 
     @Advice.OnMethodExit(suppress = Throwable.class, onThrowable = Throwable.class)
