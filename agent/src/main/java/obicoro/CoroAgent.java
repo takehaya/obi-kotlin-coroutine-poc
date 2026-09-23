@@ -11,10 +11,12 @@ import static net.bytebuddy.matcher.ElementMatchers.takesArguments;
 
 import java.lang.instrument.Instrumentation;
 import java.util.jar.JarFile;
+import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
 import net.bytebuddy.description.type.TypeDescription;
 import net.bytebuddy.dynamic.DynamicType;
+import net.bytebuddy.dynamic.scaffold.TypeValidation;
 import net.bytebuddy.utility.JavaModule;
 
 /**
@@ -46,7 +48,9 @@ public final class CoroAgent {
       return;
     }
 
-    new AgentBuilder.Default()
+    // Type validation rejects Kotlin classes whose members are named after Java keywords, e.g.
+    // DefaultIoScheduler (Dispatchers.IO) has a field literally named "default".
+    new AgentBuilder.Default(new ByteBuddy().with(TypeValidation.DISABLED))
         .disableClassFormatChanges()
         .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
         .with(AgentBuilder.InitializationStrategy.NoOp.INSTANCE)
