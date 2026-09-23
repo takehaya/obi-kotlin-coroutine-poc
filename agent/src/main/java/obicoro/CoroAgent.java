@@ -85,6 +85,9 @@ public final class CoroAgent {
         // io.netty Runnables are deliberately NOT included: instrumenting event-loop bodies
         // (run() methods that never return) leaves stale mounts on threads and poisons every
         // lineage. Cross-event-loop handoffs are handled by HandlerChannelRead instead.
+        // Scheduler plumbing is excluded too: TaskImpl is a wrapper built on the dispatching thread
+        // and LimitedDispatcher$Worker is a reused drain loop, so neither belongs to one request;
+        // stamping them handed the first request's id to every task they later ran.
         // EventLoopImplBase subtypes are excluded for the same reason: DefaultExecutor is a
         // singleton created lazily by whichever lineage first calls delay(), and its run() is the
         // event-loop body of the DefaultExecutor thread, which never returns: that first lineage
@@ -93,7 +96,9 @@ public final class CoroAgent {
             nameStartsWith("kotlinx.coroutines")
                 .or(nameStartsWith("io.ktor"))
                 .and(isSubTypeOf(Runnable.class))
-                .and(not(hasSuperType(named("kotlinx.coroutines.EventLoopImplBase")))))
+                .and(not(hasSuperType(named("kotlinx.coroutines.EventLoopImplBase"))))
+                .and(not(named("kotlinx.coroutines.scheduling.TaskImpl")))
+                .and(not(named("kotlinx.coroutines.internal.LimitedDispatcher$Worker"))))
         .transform(
             (builder, type, cl, module, pd) ->
                 builder
