@@ -32,10 +32,10 @@ public final class Track {
       new AtomicInteger(Integer.getInteger("obicoro.debugBudget", 300));
 
   /**
-   * task -> lineage id. Consumed by run(); re-stamped on every dispatch.
+   * task -> lineage id, fixed at construction and read by every run().
    *
-   * <p>Weak keys: tasks that never reach run() (a DispatchedContinuation resumed through
-   * resumeUndispatched, unconfined paths) are collected instead of pinned forever.
+   * <p>Weak keys: an entry lives exactly as long as its task, including tasks that never reach
+   * run() (a DispatchedContinuation resumed through resumeUndispatched, unconfined paths).
    *
    * <p>Precondition: WeakHashMap looks keys up by their own equals/hashCode, so carrier tasks must
    * not override them with value semantics. Verified for kotlinx-coroutines 1.10.2 and Ktor 3.2.2:
@@ -81,18 +81,15 @@ public final class Track {
 
   // ---- carrying the id along the task graph ----
 
-  /** Constructor exit of kotlinx/ktor Runnables: tasks born inside a lineage inherit its id. */
+  /**
+   * Constructor exit of kotlinx/ktor Runnables: tasks born inside a lineage inherit its id, for
+   * good. A coroutine belongs to the request that launched it, so the id is never refreshed
+   * later: a dispatch runs on whatever thread wakes the coroutine, which under concurrency is
+   * often busy with another request.
+   */
   public static void created(Object task) {
     if (task instanceof Thread) {
       return; // worker threads themselves (CoroutineScheduler$Worker etc.) are not carriers
-    }
-    stamp(task);
-  }
-
-  /** CoroutineDispatcher.dispatch entry (calling thread): refreshes reused tasks' ids. */
-  public static void dispatched(Object task) {
-    if (task == null || task instanceof Thread) {
-      return;
     }
     stamp(task);
   }
@@ -114,7 +111,7 @@ public final class Track {
     if (task instanceof Thread) {
       return prev;
     }
-    Long id = pendingId.remove(task);
+    Long id = pendingId.get(task);
     if (id != null && id != 0L) {
       setActive(id, prev, task.getClass().getName());
     }

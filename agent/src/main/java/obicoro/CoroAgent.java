@@ -101,17 +101,6 @@ public final class CoroAgent {
                     .visit(
                         Advice.to(TaskRun.class)
                             .on(named("run").and(takesArguments(0)).and(not(isAbstract())))))
-        // Dispatch: CoroutineDispatcher (including Ktor subclasses such as NettyDispatcher).
-        .type(hasSuperType(named("kotlinx.coroutines.CoroutineDispatcher")))
-        .transform(
-            (builder, type, cl, module, pd) ->
-                builder.visit(
-                    Advice.to(Dispatched.class)
-                        .on(
-                            named("dispatch")
-                                .or(named("dispatchYield"))
-                                .and(takesArguments(2))
-                                .and(not(isAbstract())))))
         // Connection scope: Netty socket reads (brackets the recv syscall and the inline part of
         // request handling with the channel id, which keys the server-span insert).
         // The NIO and epoll transports are both covered; io_uring and KQueue are not.
@@ -154,14 +143,6 @@ public final class CoroAgent {
     @Advice.OnMethodExit(suppress = Throwable.class)
     public static void exit(@Advice.This Object task) {
       Track.created(task);
-    }
-  }
-
-  @SuppressWarnings("unused")
-  public static final class Dispatched {
-    @Advice.OnMethodEnter(suppress = Throwable.class)
-    public static void enter(@Advice.Argument(1) Object task) {
-      Track.dispatched(task);
     }
   }
 

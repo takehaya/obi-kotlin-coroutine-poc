@@ -19,7 +19,7 @@ A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines mas
 
 - **Lineage id**: identity hash of the incoming connection object.
 - **Scopes** (where an id enters a thread): Netty `NioByteUnsafe.read` / `EpollStreamUnsafe.epollInReady` (bracket the recv syscall, keying the server-span insert; the NIO and epoll transports are covered, io_uring and KQueue are not), inbound handlers' `channelRead` (the cross-event-loop handoff is a hidden-class lambda and cannot be instrumented, so the receiving side recovers the id from `ctx.channel()`), and ktor-network `NIOSocketImpl.attachFor*Impl` with preserve-or-seed semantics (which also covers the CIO server engine).
-- **Carry**: constructors of kotlinx/ktor `Runnable`s and `CoroutineDispatcher.dispatch` stamp the current id onto the task.
+- **Carry**: constructors of kotlinx/ktor `Runnable`s stamp the current id onto the task, once. A coroutine belongs to the request that launched it; re-stamping on dispatch would hand it the id of whichever request's thread happened to wake it.
 - **Apply**: task `run()` entry mounts the id, exit restores the previous state — no state ever lingers on a thread.
 
 ### Results (fully connected traces)
