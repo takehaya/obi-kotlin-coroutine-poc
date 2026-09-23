@@ -86,6 +86,10 @@ This is a proof of concept, not a production agent.
 - Scope hooks cover Ktor's Netty and CIO engines and the CIO client. On Netty only the NIO and epoll transports are hooked; io_uring and KQueue are not. Other engines/clients/transports need their own scope hooks.
 - The lineage id (31-bit identity hash) can collide in principle.
 - Tied to OBI v0.10.0's ioctl ABI.
+- Only plaintext HTTP/1.1 has been measured. TLS (which goes through OBI's SSL path), HTTP/2 and gRPC are untested.
+- Only Ktor has been exercised. Spring WebFlux with coroutines and other coroutine-based stacks are untested.
+- The JNI shim is compiled on the host for x86_64 glibc; other architectures or musl-based images need a rebuild.
+- The agent writes the same `java_vt_threads` entry as OBI's own virtual-thread instrumentation. A JVM that runs virtual threads and coroutines on the same carrier threads would have the two overwrite each other; this combination has not been measured.
 
 ## License
 
