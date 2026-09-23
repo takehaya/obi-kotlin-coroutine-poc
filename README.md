@@ -44,12 +44,12 @@ Earlier versions of this README reported a concurrent residue (136–156/200 on 
 
 | endpoint, round | p50 off → on | p99 off → on | req/s off → on | JVM CPU (cores) off → on | ioctl per request off → on |
 |---|---|---|---|---|---|
-| `/direct`, 1 | 25.7 → 26.2 ms | 40.6 → 43.3 ms | 598 → 586 | 7.27 → 7.74 | 7.0 → 74.6 |
-| `/direct`, 2 | 27.8 → 24.6 ms | 38.5 → 47.3 ms | 559 → 625 | 6.77 → 6.29 | 7.0 → 74.7 |
-| `/hop`, 1 | 54.5 → 55.2 ms | 63.3 → 65.3 ms | 289 → 284 | 2.16 → 2.57 | 7.0 → 83.3 |
-| `/hop`, 2 | 56.0 → 54.9 ms | 71.1 → 65.9 ms | 281 → 285 | 2.39 → 2.67 | 7.0 → 83.5 |
+| `/direct`, 1 | 23.8 → 24.0 ms | 39.3 → 46.6 ms | 648 → 628 | 5.08 → 5.78 | 7.0 → 76.0 |
+| `/direct`, 2 | 23.6 → 24.0 ms | 40.9 → 50.1 ms | 651 → 617 | 5.41 → 5.65 | 7.0 → 76.1 |
+| `/hop`, 1 | 53.3 → 53.0 ms | 60.8 → 59.7 ms | 295 → 298 | 1.80 → 1.81 | 7.0 → 87.6 |
+| `/hop`, 2 | 52.8 → 53.0 ms | 56.8 → 58.2 ms | 301 → 295 | 1.70 → 1.79 | 7.0 → 87.5 |
 
-Latency and throughput differences change sign between rounds, so they are within run-to-run noise. `/hop` costs 12–19% more JVM CPU with the agent in both rounds; on `/direct` the CPU difference is below the noise. The agent adds about 70 `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The 7 per request without the agent are made by the JVM with OBI attached; their source was not investigated.
+On `/direct` the agent costs about 0.3 ms at p50, 7–9 ms at p99 and 3–5% of throughput, in the same direction in both rounds; on `/hop` the difference is within noise. The agent adds 69–81 `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The load is closed-loop at concurrency 16 and latency is dominated by the backend's 20 ms `delay`, so this setup only shows effects larger than roughly a millisecond. The 7 per request without the agent are made by the JVM with OBI attached; their source was not investigated.
 
 ## Reproduction
 
