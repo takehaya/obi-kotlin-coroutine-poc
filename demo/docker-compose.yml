@@ -1,6 +1,8 @@
 services:
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    # Pinned like OBI below, so the walkthrough still reproduces months from now
+    # (Jaeger 2.x all-in-one changed the query API the analysis scripts use).
+    image: jaegertracing/all-in-one:1.76.0
     ports:
       - "16686:16686"   # UI / API
       - "4318:4318"     # OTLP HTTP (OBI reaches it from the host network)

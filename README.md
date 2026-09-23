@@ -48,8 +48,8 @@ Prefer a guided tour? [PLAYGROUND.md](PLAYGROUND.md) walks through a 10-minute b
 # 2. Start the stack: frontend/backend (Ktor), jfront (plain-Java control), Jaeger, OBI.
 #    Without FRONTEND_JAVA_OPTS you get the baseline (split traces).
 cd demo
-FRONTEND_JAVA_OPTS="-javaagent:/coroagent/coroagent.jar -Dobicoro.native=/coroagent/libcoroagent.so" \
-  sudo -E docker compose up -d
+AGENT="-javaagent:/coroagent/coroagent.jar -Dobicoro.native=/coroagent/libcoroagent.so"
+FRONTEND_JAVA_OPTS="$AGENT" sudo -E docker compose up -d
 
 # 3. Drive the four conditions and summarize trace compositions from the Jaeger API
 ./run_conditions.sh
@@ -58,13 +58,16 @@ python3 analyze_jaeger.py results
 # Concurrent load variant
 ./run_concurrent.sh results-concurrent
 python3 analyze_concurrent.py results-concurrent
-
-# CIO server engine variant
-KTOR_ENGINE=cio FRONTEND_JAVA_OPTS="..." sudo -E docker compose up -d --force-recreate frontend
-
-# Netty epoll transport variant (default is NIO)
-NETTY_TRANSPORT=epoll FRONTEND_JAVA_OPTS="..." sudo -E docker compose up -d --force-recreate frontend
 ```
+
+Variants are switched with an environment variable on the `up` line (e.g. `KTOR_ENGINE=cio FRONTEND_JAVA_OPTS="$AGENT" sudo -E docker compose up -d --force-recreate`), or with the `make` shortcut, which re-creates the stack with the agent attached:
+
+- `KTOR_ENGINE=cio` — frontend server engine, Netty by default (`make up-cio`).
+- `NETTY_TRANSPORT=epoll` — Netty's native epoll transport, NIO by default (`make up-epoll`).
+- `JFRONT_EXECUTOR=virtual` — plain-Java control service on a JDK 21 virtual-thread-per-task executor (`make up-vt`).
+- `OBICORO_DEBUG=1` — agent debug logging, see below.
+
+The load and analysis steps have shortcuts too: `make load RESULTS=<dir>` / `make analyze RESULTS=<dir>`, and `make load-concurrent` / `make analyze-concurrent`.
 
 Traces are also browsable in the Jaeger UI at http://localhost:16686 (compare service `frontend` with the control `jfront`). `OBICORO_DEBUG=1` makes the agent log mounts/stamps to stderr, plus one `transformed <class>` line for every class it instruments (useful to check a hook still matches after a Netty/Ktor upgrade). Transformation errors are always logged, with or without the variable.
 

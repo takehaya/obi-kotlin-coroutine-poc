@@ -120,6 +120,7 @@ make clean   # remove build outputs and downloaded results
 
 The sequential conditions above are the easy part; the interesting limits show up under concurrency.
 
-- `demo/run_concurrent.sh` and `demo/analyze_concurrent.py` reproduce the concurrent rows of the README's results table, including the pooled-connection residue that motivates the upstream proposal.
-- `KTOR_ENGINE=cio` switches the frontend server engine from Netty to CIO (see the README for the compose invocation).
+- `make load-concurrent` and `make analyze-concurrent` reproduce the concurrent rows of the README's results table, including the pooled-connection residue that motivates the upstream proposal.
+- `make up-cio` switches the frontend server engine from Netty to CIO, `make up-epoll` switches Netty from the NIO transport to native epoll.
+- `make up-vt` runs the `jfront` control service on a JDK 21 virtual-thread-per-task executor.
 - Setting `OBICORO_DEBUG=1` before `make up` makes the agent log every mount and stamp to stderr.
