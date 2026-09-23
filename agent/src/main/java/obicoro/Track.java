@@ -1,7 +1,9 @@
 package obicoro;
 
 import java.lang.reflect.Field;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Collections;
+import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -29,30 +31,23 @@ public final class Track {
   private static final AtomicInteger debugBudget =
       new AtomicInteger(Integer.getInteger("obicoro.debugBudget", 300));
 
-  /** task -> lineage id. Consumed by run(); re-stamped on every dispatch. */
-  private static final ConcurrentHashMap<Key, Long> pendingId = new ConcurrentHashMap<>();
+  /**
+   * task -> lineage id. Consumed by run(); re-stamped on every dispatch.
+   *
+   * <p>Weak keys: tasks that never reach run() (a DispatchedContinuation resumed through
+   * resumeUndispatched, unconfined paths) are collected instead of pinned forever.
+   *
+   * <p>Precondition: WeakHashMap looks keys up by their own equals/hashCode, so carrier tasks must
+   * not override them with value semantics. Verified for kotlinx-coroutines 1.10.2 and Ktor 3.2.2:
+   * no Runnable in those jars declares equals(Object) or hashCode().
+   */
+  // ponytail: global lock on every stamp/run; shard or use a ConcurrentHashMap<WeakKey,..> with a
+  // ReferenceQueue if it shows up in profiles
+  private static final Map<Object, Long> pendingId =
+      Collections.synchronizedMap(new WeakHashMap<Object, Long>());
 
   /** Current lineage id per thread. 0 = none. */
   private static final ThreadLocal<long[]> activeId = ThreadLocal.withInitial(() -> new long[1]);
-
-  /** Identity-based key (some kotlinx classes may define equals). */
-  static final class Key {
-    final Object ref;
-
-    Key(Object ref) {
-      this.ref = ref;
-    }
-
-    @Override
-    public int hashCode() {
-      return System.identityHashCode(ref);
-    }
-
-    @Override
-    public boolean equals(Object o) {
-      return o instanceof Key && ((Key) o).ref == ref;
-    }
-  }
 
   /** Per-class cache of the this$0 (inner-class outer reference) field. */
   private static final ClassValue<Field> OUTER =
@@ -107,10 +102,7 @@ public final class Track {
     if (id == 0) {
       return; // tasks born outside any lineage are not carried (no mount = stock behavior)
     }
-    if (pendingId.size() > 100_000) {
-      pendingId.clear(); // runaway guard for never-consumed entries (prototype quality)
-    }
-    pendingId.put(new Key(task), id);
+    pendingId.put(task, id);
     if (debug && debugBudget.getAndDecrement() > 0) {
       log("stamp id=" + id + " tid=" + Native.gettid0() + " task=" + task.getClass().getName());
     }
@@ -122,7 +114,7 @@ public final class Track {
     if (task instanceof Thread) {
       return prev;
     }
-    Long id = pendingId.remove(new Key(task));
+    Long id = pendingId.remove(task);
     if (id != null && id != 0L) {
       setActive(id, prev, task.getClass().getName());
     }

@@ -10,6 +10,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+// The return value is always an error and carries no information about OBI: the kprobe on
+// sys_ioctl consumes the request at syscall entry, then the kernel rejects cmd 0x0b10b1 on fd 0
+// (ENOTTY, or EBADF if stdin is closed). Do not use it to detect whether OBI is attached.
 static jint send_op(unsigned char op, jlong payload) {
     unsigned char buf[9];
     buf[0] = op;

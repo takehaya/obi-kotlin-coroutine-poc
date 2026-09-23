@@ -11,8 +11,13 @@ import static net.bytebuddy.matcher.ElementMatchers.takesArguments;
 
 import java.lang.instrument.Instrumentation;
 import java.util.jar.JarFile;
+import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
+import net.bytebuddy.description.type.TypeDescription;
+import net.bytebuddy.dynamic.DynamicType;
+import net.bytebuddy.dynamic.scaffold.TypeValidation;
+import net.bytebuddy.utility.JavaModule;
 
 /**
  * Experimental agent that carries a per-request lineage id along the kotlinx.coroutines / Ktor
@@ -24,30 +29,71 @@ public final class CoroAgent {
   private CoroAgent() {}
 
   public static void premain(String args, Instrumentation inst) throws Exception {
+    boolean dbg = System.getenv("OBICORO_DEBUG") != null;
     // Advice code is inlined into target classes, so the referenced Track / Native classes must
     // be visible from every class loader: append them to the bootstrap search path.
     // Appending the fat jar would double-load ByteBuddy (bootstrap + app loader) and fail with a
     // LinkageError, hence the separate boot jar with just Track / Native.
-    String bootJar = System.getProperty("obicoro.bootjar", "/coroagent/coroagent-boot.jar");
-    inst.appendToBootstrapClassLoaderSearch(new JarFile(bootJar));
+    try {
+      String bootJar = System.getProperty("obicoro.bootjar", "/coroagent/coroagent-boot.jar");
+      inst.appendToBootstrapClassLoaderSearch(new JarFile(bootJar));
 
-    String nativePath = System.getProperty("obicoro.native", "/coroagent/libcoroagent.so");
-    boolean dbg = System.getenv("OBICORO_DEBUG") != null;
-    Track.init(nativePath, dbg);
+      String nativePath = System.getProperty("obicoro.native", "/coroagent/libcoroagent.so");
+      Track.init(nativePath, dbg);
+    } catch (Throwable t) {
+      // A missing boot jar (IOException) or native library (UnsatisfiedLinkError) must not abort
+      // JVM startup. Install no instrumentation either: the advice would then call Native.* and
+      // hit the same failure on every instrumented method.
+      System.err.println("[obicoro] agent disabled, running without coroutine correlation: " + t);
+      return;
+    }
 
-    new AgentBuilder.Default()
+    // Type validation rejects Kotlin classes whose members are named after Java keywords, e.g.
+    // DefaultIoScheduler (Dispatchers.IO) has a field literally named "default".
+    new AgentBuilder.Default(new ByteBuddy().with(TypeValidation.DISABLED))
         .disableClassFormatChanges()
         .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
         .with(AgentBuilder.InitializationStrategy.NoOp.INSTANCE)
         .with(AgentBuilder.TypeStrategy.Default.REDEFINE)
+        // Without a listener a hook that matches nothing (a renamed class after a Netty/Ktor
+        // upgrade, an uncovered transport) is silent and only shows up as broken traces.
+        .with(
+            new AgentBuilder.Listener.Adapter() {
+              @Override
+              public void onTransformation(
+                  TypeDescription typeDescription,
+                  ClassLoader classLoader,
+                  JavaModule module,
+                  boolean loaded,
+                  DynamicType dynamicType) {
+                if (dbg) {
+                  System.err.println("[obicoro] transformed " + typeDescription.getName());
+                }
+              }
+
+              @Override
+              public void onError(
+                  String typeName,
+                  ClassLoader classLoader,
+                  JavaModule module,
+                  boolean loaded,
+                  Throwable throwable) {
+                System.err.println("[obicoro] transform error on " + typeName + ": " + throwable);
+              }
+            })
         // Task creation and execution: kotlinx.coroutines / Ktor Runnables.
         // io.netty Runnables are deliberately NOT included: instrumenting event-loop bodies
         // (run() methods that never return) leaves stale mounts on threads and poisons every
         // lineage. Cross-event-loop handoffs are handled by HandlerChannelRead instead.
+        // EventLoopImplBase subtypes are excluded for the same reason: DefaultExecutor is a
+        // singleton created lazily by whichever lineage first calls delay(), and its run() is the
+        // event-loop body of the DefaultExecutor thread, which never returns: that first lineage
+        // would stay mounted on that thread forever.
         .type(
             nameStartsWith("kotlinx.coroutines")
                 .or(nameStartsWith("io.ktor"))
-                .and(isSubTypeOf(Runnable.class)))
+                .and(isSubTypeOf(Runnable.class))
+                .and(not(hasSuperType(named("kotlinx.coroutines.EventLoopImplBase")))))
         .transform(
             (builder, type, cl, module, pd) ->
                 builder
@@ -68,11 +114,17 @@ public final class CoroAgent {
                                 .and(not(isAbstract())))))
         // Connection scope: Netty socket reads (brackets the recv syscall and the inline part of
         // request handling with the channel id, which keys the server-span insert).
+        // The NIO and epoll transports are both covered; io_uring and KQueue are not.
         .type(named("io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe"))
         .transform(
             (builder, type, cl, module, pd) ->
                 builder.visit(
                     Advice.to(NettyRead.class).on(named("read").and(takesArguments(0)))))
+        .type(named("io.netty.channel.epoll.AbstractEpollStreamChannel$EpollStreamUnsafe"))
+        .transform(
+            (builder, type, cl, module, pd) ->
+                builder.visit(
+                    Advice.to(NettyRead.class).on(named("epollInReady").and(takesArguments(0)))))
         // Connection scope: Netty inbound handler entry (channelRead). The hop between event-loop
         // groups goes through a hidden-class lambda that cannot be instrumented, so the receiving
         // side recovers the id from ctx.channel(). Ktor's NettyApplicationCallHandler launches the

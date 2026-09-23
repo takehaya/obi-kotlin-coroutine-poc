@@ -15,10 +15,9 @@ public class Main {
         HttpServer server = HttpServer.create(new InetSocketAddress(8082), 0);
         // JFRONT_EXECUTOR=virtual runs each request on a JDK 21 virtual thread,
         // to compare OBI's virtual-thread correlation against coroutines.
+        boolean virtual = "virtual".equals(System.getenv("JFRONT_EXECUTOR"));
         server.setExecutor(
-            "virtual".equals(System.getenv("JFRONT_EXECUTOR"))
-                ? Executors.newVirtualThreadPerTaskExecutor()
-                : Executors.newFixedThreadPool(8));
+            virtual ? Executors.newVirtualThreadPerTaskExecutor() : Executors.newFixedThreadPool(8));
         server.createContext("/call", exchange -> {
             HttpURLConnection conn = (HttpURLConnection) URI.create(backend + "/work").toURL().openConnection();
             String body;
@@ -31,6 +30,8 @@ public class Main {
             exchange.close();
         });
         server.start();
-        System.out.println("jfront listening on 8082 -> " + backend);
+        // Logged so a saved container log proves which control variant produced a result set.
+        System.out.println("jfront listening on 8082 -> " + backend
+            + " (executor: " + (virtual ? "virtual threads" : "fixed pool of 8") + ")");
     }
 }
