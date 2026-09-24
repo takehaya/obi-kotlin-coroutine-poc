@@ -96,6 +96,10 @@ public final class CoroAgent {
         .type(
             nameStartsWith("kotlinx.coroutines")
                 .or(nameStartsWith("io.ktor"))
+                // OkHttp's async call: built by enqueue() in the caller's coroutine, run (and the
+                // socket written) on OkHttp's own pool. Only this class: OkHttp's TaskRunner
+                // loops are long-lived and would hoard the first request's id.
+                .or(named("okhttp3.internal.connection.RealCall$AsyncCall"))
                 .and(isSubTypeOf(Runnable.class))
                 .and(not(hasSuperType(named("kotlinx.coroutines.EventLoopImplBase"))))
                 .and(not(named("kotlinx.coroutines.scheduling.TaskImpl")))
