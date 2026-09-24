@@ -1,0 +1,6 @@
+
+===== condition: vt =====
+   10 traces: ['backend/server:GET /work', 'frontend/client:GET /work', 'frontend/internal:in queue', 'frontend/internal:processing', 'frontend/server:GET /*']
+
+===== condition: direct =====
+   10 traces: ['backend/server:GET /work', 'frontend/client:GET /work', 'frontend/internal:in queue', 'frontend/internal:processing', 'frontend/server:GET /direct']

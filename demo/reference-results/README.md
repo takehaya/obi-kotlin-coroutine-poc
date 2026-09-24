@@ -14,6 +14,8 @@ Raw Jaeger JSON is not committed (`demo/results*/` is ignored); `make load RESUL
 | `keepalive-nio.txt`, `keepalive-cio.txt` | agent on, 10 requests per endpoint over one connection (`curl` with several URLs) |
 | `concurrent-<engine>-r<n>.txt` | agent on, `make load-concurrent` / `make analyze-concurrent`, run n |
 | `limits-client-<engine>.txt` | agent on, Netty NIO, `CLIENT_ENGINE=<engine>`, sequential incl. `/shared`; `limits-client-okhttp-concurrent.txt` is concurrency 16 |
+| `vt-dispatcher*.txt` | agent on, `/vt` sequential and at concurrency 16 (window `vt`) |
+| `tls-okhttp*.txt` | HTTPS backend with the OkHttp client, agent on / off |
 | `overhead-round1.md`, `overhead-round2.md` | `demo/run_overhead.sh` agent-off vs agent-on, 4000 requests at concurrency 16 after a 300-request warm-up |
 
 The sequential baselines for Netty NIO (0/10) and CIO (3/10) were measured in July and August 2026 with the same scripts; they do not depend on the agent.

@@ -36,6 +36,8 @@ A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines mas
 | OkHttp client instead of CIO, sequential and concurrency 16 | 0/10, 0 | **10/10, 200/200** |
 | Java `HttpClient` instead of CIO, sequential | 0/10 | 0/10 (not supported) |
 | `/shared`: backend called by one long-lived worker coroutine | 0/10 | 0/10 (expected limit, see below) |
+| `/vt`: backend call in a coroutine on a virtual-thread dispatcher, sequential and concurrency 16 | 0/10, 4/200 | **10/10, 200/200** |
+| HTTPS to the backend (OkHttp, `BACKEND_TLS=1`), sequential `/direct`, `/hop` | 0/10 | **10/10** |
 
 The concurrent rows held in three runs each on NIO and CIO and one on epoll, with no mis-parented client span in any of them. Controls under the same OBI, agent not involved: the thread-per-request plain-Java service connects 10/10, and so does the same service on a virtual-thread-per-task executor (OBI's own virtual-thread support, `make up-vt`). The analyzer output behind every row is in [`demo/reference-results/`](demo/reference-results/).
 
@@ -84,6 +86,7 @@ Variants are switched with an environment variable on the `up` line (e.g. `KTOR_
 - `KTOR_ENGINE=cio` — frontend server engine, Netty by default (`make up-cio`).
 - `NETTY_TRANSPORT=epoll` — Netty's native epoll transport, NIO by default (`make up-epoll`).
 - `JFRONT_EXECUTOR=virtual` — plain-Java control service on a JDK 21 virtual-thread-per-task executor (`make up-vt`).
+- `BACKEND_TLS=1 BACKEND_URL=https://backend:8443 CLIENT_ENGINE=okhttp` — HTTPS from the frontend to the backend (self-signed certificate).
 - `CLIENT_ENGINE=okhttp` or `java` — the frontend's backend client (CIO by default); `CLIENT_POOL=<n>` turns on CIO pipelining over n connections; `BACKEND_ENGINE=cio` switches the backend's server engine.
 - `OBICORO_DEBUG=1` — agent debug logging, see below.
 
@@ -111,10 +114,10 @@ This is a proof of concept, not a production agent.
 - Backend clients: Ktor CIO and OkHttp are covered. The JDK's `HttpClient` (Ktor's Java engine) is not: it writes from its own selector thread inside `java.net.http`, and every request splits.
 - Scope hooks cover Ktor's Netty and CIO engines and the CIO client. On Netty only the NIO and epoll transports are hooked; io_uring and KQueue are not. Other engines/clients/transports need their own scope hooks.
 - Tied to OBI v0.10.0's ioctl ABI.
-- Only plaintext HTTP/1.1 has been measured. TLS (which goes through OBI's SSL path), HTTP/2 and gRPC are untested.
+- TLS: with HTTPS from the frontend to the backend (OkHttp, JSSE), the agent's in-process correlation holds (`/direct`, `/hop` 10/10; on `/parallel` 19 of 20 client spans sit under their server span). OBI's cross-service link over TLS is less reliable: 10 of those 19 reached the backend's span, and 13 of 20 did without the agent. Ktor's CIO client uses its own TLS rather than JSSE and was not tried. HTTP/2 and gRPC are untested.
 - Only Ktor has been exercised. Spring WebFlux with coroutines and other coroutine-based stacks are untested.
 - The JNI shim is compiled on the host for x86_64 glibc; other architectures or musl-based images need a rebuild.
-- The agent writes the same `java_vt_threads` entry as OBI's own virtual-thread instrumentation. A JVM that runs virtual threads and coroutines on the same carrier threads would have the two overwrite each other; this combination has not been measured.
+- The agent writes the same `java_vt_threads` entry as OBI's own virtual-thread instrumentation. `/vt` (coroutines dispatched onto virtual threads) connects fully, but its socket I/O runs on Ktor's I/O coroutines, not on the virtual threads, so a case where both write the same carrier at the moment of a send has not been exercised.
 
 ## License
 
