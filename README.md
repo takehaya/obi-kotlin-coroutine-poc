@@ -58,6 +58,8 @@ On `/direct` the agent costs about 0.3 ms at p50, 7–9 ms at p99 and 3–5% of 
 
 The absolute CPU (5–10 ms per `/direct` request, with or without OBI) is mostly kotlinx.coroutines' scheduler hunting for work: `WorkQueue.tryStealLastScheduled` is 29% of JFR's Java samples, and native time is Netty's `epoll_wait`. That spinning varies with load, and the test host was shared with other busy workloads, so CPU deltas of a few percent are not meaningful here. A saturation (open-loop) comparison was not run for the same reason.
 
+To repeat these measurements on a quiet machine, including the open-loop comparison, see [`vm/README.md`](vm/README.md).
+
 ## Reproduction
 
 Requirements: Linux kernel 5.8+ with BTF, Docker (compose v2), JDK 21 (with JNI headers), gcc, python3. OBI runs privileged.
