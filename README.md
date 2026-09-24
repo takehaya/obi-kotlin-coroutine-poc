@@ -33,6 +33,11 @@ A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines mas
 | concurrency 16, `/direct` (200 req), NIO / CIO / epoll | 0 | **200/200** |
 | concurrency 16, `/hop` (200 req), NIO / CIO / epoll | 0 | **200/200** |
 | concurrency 8, `/parallel` (100 req), NIO / CIO / epoll | 0 | **100/100** |
+| OkHttp client instead of CIO, sequential and concurrency 16 | 0/10, 0 | **10/10, 200/200** |
+| Java `HttpClient` instead of CIO, sequential | 0/10 | 0/10 (not supported) |
+| `/shared`: backend called by one long-lived worker coroutine | 0/10 | 0/10 (expected limit, see below) |
+| `/vt`: backend call in a coroutine on a virtual-thread dispatcher, sequential and concurrency 16 | 0/10, 4/200 | **10/10, 200/200** |
+| HTTPS to the backend (OkHttp, `BACKEND_TLS=1`), sequential `/direct`, `/hop` | 0/10 | **10/10** |
 
 The concurrent rows held in three runs each on NIO and CIO and one on epoll, with no mis-parented client span in any of them. Controls under the same OBI, agent not involved: the thread-per-request plain-Java service connects 10/10, and so does the same service on a virtual-thread-per-task executor (OBI's own virtual-thread support, `make up-vt`). The analyzer output behind every row is in [`demo/reference-results/`](demo/reference-results/).
 
@@ -49,7 +54,9 @@ Earlier versions of this README reported a concurrent residue (136–156/200 on 
 | `/hop`, 1 | 53.3 → 53.0 ms | 60.8 → 59.7 ms | 295 → 298 | 1.80 → 1.81 | 7.0 → 87.6 |
 | `/hop`, 2 | 52.8 → 53.0 ms | 56.8 → 58.2 ms | 301 → 295 | 1.70 → 1.79 | 7.0 → 87.5 |
 
-On `/direct` the agent costs about 0.3 ms at p50, 7–9 ms at p99 and 3–5% of throughput, in the same direction in both rounds; on `/hop` the difference is within noise. The agent adds 69–81 `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The load is closed-loop at concurrency 16 and latency is dominated by the backend's 20 ms `delay`, so this setup only shows effects larger than roughly a millisecond. The 7 per request without the agent are made by the JVM with OBI attached; their source was not investigated.
+On `/direct` the agent costs about 0.3 ms at p50, 7–9 ms at p99 and 3–5% of throughput, in the same direction in both rounds; on `/hop` the difference is within noise. The agent adds 69–81 `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The load is closed-loop at concurrency 16 and latency is dominated by the backend's 20 ms `delay`, so this setup only shows effects larger than roughly a millisecond. The 7 per request without the agent come from OBI's own injected Java agent: with OBI stopped the count is 0, and JFR shows them in `io.opentelemetry.obi.java.Agent$NativeLib.ioctl`.
+
+The absolute CPU (5–10 ms per `/direct` request, with or without OBI) is mostly kotlinx.coroutines' scheduler hunting for work: `WorkQueue.tryStealLastScheduled` is 29% of JFR's Java samples, and native time is Netty's `epoll_wait`. That spinning varies with load, and the test host was shared with other busy workloads, so CPU deltas of a few percent are not meaningful here. A saturation (open-loop) comparison was not run for the same reason.
 
 ## Reproduction
 
@@ -81,6 +88,8 @@ Variants are switched with an environment variable on the `up` line (e.g. `KTOR_
 - `KTOR_ENGINE=cio` — frontend server engine, Netty by default (`make up-cio`).
 - `NETTY_TRANSPORT=epoll` — Netty's native epoll transport, NIO by default (`make up-epoll`).
 - `JFRONT_EXECUTOR=virtual` — plain-Java control service on a JDK 21 virtual-thread-per-task executor (`make up-vt`).
+- `BACKEND_TLS=1 BACKEND_URL=https://backend:8443 CLIENT_ENGINE=okhttp` — HTTPS from the frontend to the backend (self-signed certificate).
+- `CLIENT_ENGINE=okhttp` or `java` — the frontend's backend client (CIO by default); `CLIENT_POOL=<n>` turns on CIO pipelining over n connections; `BACKEND_ENGINE=cio` switches the backend's server engine.
 - `OBICORO_DEBUG=1` — agent debug logging, see below.
 
 The load and analysis steps have shortcuts too: `make load RESULTS=<dir>` / `make analyze RESULTS=<dir>`, and `make load-concurrent` / `make analyze-concurrent`.
@@ -102,14 +111,15 @@ demo/    4-service topology (compose), OBI config, load & analysis scripts
 
 This is a proof of concept, not a production agent.
 
-- Requests that genuinely share a connection concurrently (HTTP pipelining, HTTP/2 streams) are unmeasured. A per-thread mount names one request at a time, so a single `run()` that serves several requests at once cannot be attributed; this is the case the upstream proposal (state keyed by logical task) is for. The demo could not exercise it: CIO client pipelining against the Netty backend fails for about 3 in 4 requests even without OBI or the agent.
-- A coroutine carries the id of the request it was launched in. A long-lived coroutine launched inside one request and later reused by others (a connection pool's I/O coroutine, an app-scoped worker started lazily) would keep the first request's id.
+- Requests that genuinely share a connection concurrently (HTTP pipelining, HTTP/2 streams) are unmeasured. A per-thread mount names one request at a time, so a single `run()` that serves several requests at once cannot be attributed; this is the case the upstream proposal (state keyed by logical task) is for. The demo could not exercise it: CIO client pipelining (`CLIENT_POOL=4`) fails for most requests even without OBI or the agent, against a Netty backend (78 of 100 returned 500) and a CIO backend (`BACKEND_ENGINE=cio`, 49 returned 500 and 18 timed out).
+- A coroutine carries the id of the request it was launched in. A long-lived coroutine launched inside one request and later reused by others keeps the first request's id; `/shared` (an app-scoped worker started by the first request) reproduces this: its client spans lose their parent, 0/10.
+- Backend clients: Ktor CIO and OkHttp are covered. The JDK's `HttpClient` (Ktor's Java engine) is not: it writes from its own selector thread inside `java.net.http`, and every request splits.
 - Scope hooks cover Ktor's Netty and CIO engines and the CIO client. On Netty only the NIO and epoll transports are hooked; io_uring and KQueue are not. Other engines/clients/transports need their own scope hooks.
 - Tied to OBI v0.10.0's ioctl ABI.
-- Only plaintext HTTP/1.1 has been measured. TLS (which goes through OBI's SSL path), HTTP/2 and gRPC are untested.
+- TLS: with HTTPS from the frontend to the backend (OkHttp, JSSE), the agent's in-process correlation holds (`/direct`, `/hop` 10/10; on `/parallel` 19 of 20 client spans sit under their server span). OBI's cross-service link over TLS is less reliable: 10 of those 19 reached the backend's span, and 13 of 20 did without the agent. Ktor's CIO client uses its own TLS rather than JSSE and was not tried. HTTP/2 and gRPC are untested.
 - Only Ktor has been exercised. Spring WebFlux with coroutines and other coroutine-based stacks are untested.
 - The JNI shim is compiled on the host for x86_64 glibc; other architectures or musl-based images need a rebuild.
-- The agent writes the same `java_vt_threads` entry as OBI's own virtual-thread instrumentation. A JVM that runs virtual threads and coroutines on the same carrier threads would have the two overwrite each other; this combination has not been measured.
+- The agent writes the same `java_vt_threads` entry as OBI's own virtual-thread instrumentation. `/vt` (coroutines dispatched onto virtual threads) connects fully, but its socket I/O runs on Ktor's I/O coroutines, not on the virtual threads, so a case where both write the same carrier at the moment of a send has not been exercised.
 
 ## License
 

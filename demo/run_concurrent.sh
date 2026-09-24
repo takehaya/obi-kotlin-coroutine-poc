@@ -18,9 +18,11 @@ run() {
     sleep 3
 }
 
-run direct   http://localhost:8080/direct   200 16
-run hop      http://localhost:8080/hop      200 16
-run parallel http://localhost:8080/parallel 100 8
+# CONDITIONS lists name:requests:concurrency, e.g. CONDITIONS="vt:200:16".
+for spec in ${CONDITIONS:-direct:200:16 hop:200:16 parallel:100:8}; do
+    IFS=: read -r name total conc <<< "$spec"
+    run "$name" "http://localhost:8080/$name" "$total" "$conc"
+done
 
 echo "waiting for OBI batch flush (45s)..."
 sleep 45

@@ -21,10 +21,10 @@ run() {
     sleep 3
 }
 
-run direct   http://localhost:8080/direct
-run hop      http://localhost:8080/hop
-run parallel http://localhost:8080/parallel
-run java     http://localhost:8082/call
+# CONDITIONS picks the endpoints, e.g. CONDITIONS="direct shared vt"; "java" is the control.
+for name in ${CONDITIONS:-direct hop parallel java}; do
+    if [ "$name" = java ]; then run java http://localhost:8082/call; else run "$name" "http://localhost:8080/$name"; fi
+done
 
 echo "waiting for OBI batch flush (45s)..."
 sleep 45

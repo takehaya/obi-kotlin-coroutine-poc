@@ -9,13 +9,50 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-val client = HttpClient(CIO)
+// CLIENT_ENGINE picks the backend client's engine: cio (default), okhttp or java.
+// CLIENT_POOL=<n> (CIO only) turns on pipelining over at most n connections, so concurrent
+// requests really share connections; by default CIO opens one connection per call.
+val client: HttpClient = when (System.getenv("CLIENT_ENGINE")) {
+    "okhttp" -> HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
+        engine { config { trustAllForHttpsBackend() } }
+    }
+    "java" -> HttpClient(io.ktor.client.engine.java.Java)
+    else -> System.getenv("CLIENT_POOL")?.toIntOrNull()?.let { n ->
+        HttpClient(CIO) {
+            engine {
+                pipelining = true
+                endpoint.maxConnectionsPerRoute = n
+            }
+        }
+    } ?: HttpClient(CIO)
+}
+
+// Coroutines on virtual threads, where OBI's own virtual-thread tracking is active too.
+val vtDispatcher = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor().asCoroutineDispatcher()
+
+// Backend calls made by one app-scoped worker coroutine that the first /shared request starts.
+val sharedQueue: Channel<CompletableDeferred<String>> by lazy {
+    Channel<CompletableDeferred<String>>(Channel.UNLIMITED).also { queue ->
+        CoroutineScope(Dispatchers.IO).launch {
+            for (reply in queue) {
+                runCatching { client.get("$backendUrl/work").bodyAsText() }
+                    .onSuccess { reply.complete(it) }
+                    .onFailure { reply.completeExceptionally(it) }
+            }
+        }
+    }
+}
 val backendUrl: String = System.getenv("BACKEND_URL") ?: "http://localhost:8081"
 
 // KTOR_ENGINE=cio switches the server engine to CIO (default: Netty), to check
@@ -56,6 +93,18 @@ fun Application.app() {
             }
             call.respondText("hop:$r")
         }
+        // (d) the backend call is made by a long-lived worker coroutine started by the first
+        // /shared request, not by the request's own coroutine
+        get("/shared") {
+            val reply = CompletableDeferred<String>()
+            sharedQueue.send(reply)
+            call.respondText("shared:${reply.await()}")
+        }
+        // (e) the backend call runs in a coroutine dispatched onto virtual threads
+        get("/vt") {
+            val r = withContext(vtDispatcher) { client.get("$backendUrl/work").bodyAsText() }
+            call.respondText("vt:$r")
+        }
         // (c) two parallel calls via async on the IO dispatcher
         get("/parallel") {
             val rs = withContext(Dispatchers.IO) {
@@ -66,4 +115,17 @@ fun Application.app() {
             call.respondText("parallel:${rs.size}")
         }
     }
+}
+
+// The demo's HTTPS backend (BACKEND_TLS=1) uses a throwaway self-signed certificate.
+fun okhttp3.OkHttpClient.Builder.trustAllForHttpsBackend() {
+    if (!backendUrl.startsWith("https")) return
+    val trustAll = object : javax.net.ssl.X509TrustManager {
+        override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+    }
+    val context = javax.net.ssl.SSLContext.getInstance("TLS").apply { init(null, arrayOf(trustAll), null) }
+    sslSocketFactory(context.socketFactory, trustAll)
+    hostnameVerifier { _, _ -> true }
 }

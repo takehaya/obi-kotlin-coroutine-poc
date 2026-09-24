@@ -10,6 +10,12 @@ services:
 
   backend:
     image: eclipse-temurin:21-jre
+    environment:
+      # BACKEND_ENGINE=cio switches the backend server engine from Netty to CIO.
+      BACKEND_ENGINE: "${BACKEND_ENGINE:-}"
+      # BACKEND_TLS=1 adds HTTPS on 8443 (self-signed); point the frontend at it with
+      # BACKEND_URL=https://backend:8443 and CLIENT_ENGINE=okhttp.
+      BACKEND_TLS: "${BACKEND_TLS:-}"
     volumes:
       - ./backend/build/install/backend:/app:ro
     command: ["/app/bin/backend"]
@@ -18,7 +24,7 @@ services:
   frontend:
     image: eclipse-temurin:21-jre
     environment:
-      BACKEND_URL: http://backend:8081
+      BACKEND_URL: "${BACKEND_URL:-http://backend:8081}"
       # Attach the coroutine agent by setting FRONTEND_JAVA_OPTS, e.g.:
       #   FRONTEND_JAVA_OPTS="-javaagent:/coroagent/coroagent.jar -Dobicoro.native=/coroagent/libcoroagent.so"
       # Leave it empty to reproduce the baseline (broken traces).
@@ -28,6 +34,10 @@ services:
       KTOR_ENGINE: "${KTOR_ENGINE:-}"
       # NETTY_TRANSPORT=epoll switches Netty from the NIO transport to native epoll.
       NETTY_TRANSPORT: "${NETTY_TRANSPORT:-}"
+      # CLIENT_ENGINE=okhttp|java switches the backend client engine; CLIENT_POOL=<n> makes the
+      # CIO client share at most n pipelined connections.
+      CLIENT_ENGINE: "${CLIENT_ENGINE:-}"
+      CLIENT_POOL: "${CLIENT_POOL:-}"
     volumes:
       - ./frontend/build/install/frontend:/app:ro
       - ../agent/dist:/coroagent:ro

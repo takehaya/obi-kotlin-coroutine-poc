@@ -31,5 +31,6 @@ COMMON="kotlinx.coroutines.internal.DispatchedContinuation"
 check nio   "KTOR_ENGINE=" "$COMMON" 'io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe' io.ktor.server.netty.NettyApplicationCallHandler
 check epoll "NETTY_TRANSPORT=epoll" "$COMMON" 'io.netty.channel.epoll.AbstractEpollStreamChannel$EpollStreamUnsafe'
 check cio   "KTOR_ENGINE=cio" "$COMMON" io.ktor.network.sockets.NIOSocketImpl io.ktor.server.cio.backend.ServerPipelineKt
+check okhttp "CLIENT_ENGINE=okhttp BACKEND_URL=http://localhost:8080" "$COMMON" 'okhttp3.internal.connection.RealCall$AsyncCall'
 rm -f "$LOG"
 exit $fail
