@@ -54,7 +54,9 @@ Earlier versions of this README reported a concurrent residue (136–156/200 on 
 | `/hop`, 1 | 53.3 → 53.0 ms | 60.8 → 59.7 ms | 295 → 298 | 1.80 → 1.81 | 7.0 → 87.6 |
 | `/hop`, 2 | 52.8 → 53.0 ms | 56.8 → 58.2 ms | 301 → 295 | 1.70 → 1.79 | 7.0 → 87.5 |
 
-On `/direct` the agent costs about 0.3 ms at p50, 7–9 ms at p99 and 3–5% of throughput, in the same direction in both rounds; on `/hop` the difference is within noise. The agent adds 69–81 `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The load is closed-loop at concurrency 16 and latency is dominated by the backend's 20 ms `delay`, so this setup only shows effects larger than roughly a millisecond. The 7 per request without the agent are made by the JVM with OBI attached; their source was not investigated.
+On `/direct` the agent costs about 0.3 ms at p50, 7–9 ms at p99 and 3–5% of throughput, in the same direction in both rounds; on `/hop` the difference is within noise. The agent adds 69–81 `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The load is closed-loop at concurrency 16 and latency is dominated by the backend's 20 ms `delay`, so this setup only shows effects larger than roughly a millisecond. The 7 per request without the agent come from OBI's own injected Java agent: with OBI stopped the count is 0, and JFR shows them in `io.opentelemetry.obi.java.Agent$NativeLib.ioctl`.
+
+The absolute CPU (5–10 ms per `/direct` request, with or without OBI) is mostly kotlinx.coroutines' scheduler hunting for work: `WorkQueue.tryStealLastScheduled` is 29% of JFR's Java samples, and native time is Netty's `epoll_wait`. That spinning varies with load, and the test host was shared with other busy workloads, so CPU deltas of a few percent are not meaningful here. A saturation (open-loop) comparison was not run for the same reason.
 
 ## Reproduction
 
