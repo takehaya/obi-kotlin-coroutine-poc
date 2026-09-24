@@ -32,10 +32,10 @@ public final class Track {
       new AtomicInteger(Integer.getInteger("obicoro.debugBudget", 300));
 
   /**
-   * task -> lineage id. Consumed by run(); re-stamped on every dispatch.
+   * task -> lineage id, fixed at construction and read by every run().
    *
-   * <p>Weak keys: tasks that never reach run() (a DispatchedContinuation resumed through
-   * resumeUndispatched, unconfined paths) are collected instead of pinned forever.
+   * <p>Weak keys: an entry lives exactly as long as its task, including tasks that never reach
+   * run() (a DispatchedContinuation resumed through resumeUndispatched, unconfined paths).
    *
    * <p>Precondition: WeakHashMap looks keys up by their own equals/hashCode, so carrier tasks must
    * not override them with value semantics. Verified for kotlinx-coroutines 1.10.2 and Ktor 3.2.2:
@@ -81,18 +81,15 @@ public final class Track {
 
   // ---- carrying the id along the task graph ----
 
-  /** Constructor exit of kotlinx/ktor Runnables: tasks born inside a lineage inherit its id. */
+  /**
+   * Constructor exit of kotlinx/ktor Runnables: tasks born inside a lineage inherit its id, for
+   * good. A coroutine belongs to the request that launched it, so the id is never refreshed
+   * later: a dispatch runs on whatever thread wakes the coroutine, which under concurrency is
+   * often busy with another request.
+   */
   public static void created(Object task) {
     if (task instanceof Thread) {
       return; // worker threads themselves (CoroutineScheduler$Worker etc.) are not carriers
-    }
-    stamp(task);
-  }
-
-  /** CoroutineDispatcher.dispatch entry (calling thread): refreshes reused tasks' ids. */
-  public static void dispatched(Object task) {
-    if (task == null || task instanceof Thread) {
-      return;
     }
     stamp(task);
   }
@@ -114,7 +111,7 @@ public final class Track {
     if (task instanceof Thread) {
       return prev;
     }
-    Long id = pendingId.remove(task);
+    Long id = pendingId.get(task);
     if (id != null && id != 0L) {
       setActive(id, prev, task.getClass().getName());
     }
@@ -128,11 +125,58 @@ public final class Track {
 
   // ---- connection scopes (Netty reads / handler invocations, ktor-network socket attach) ----
 
-  /** Connection scope entry with preserve-or-seed. Returns the previous id. */
-  public static long scopeEnter(Object channelLike) {
+  /**
+   * byte channel -> lineage id of the socket it was attached to, so the CIO server can recover the
+   * connection's id when it starts the request pipeline (see scopeEnterConnection).
+   */
+  private static final Map<Object, Long> channelLineage =
+      Collections.synchronizedMap(new WeakHashMap<Object, Long>());
+
+  /**
+   * ktor-network socket attach with preserve-or-seed. Returns the previous id. The attached channel
+   * is remembered with the id it was read / written under.
+   */
+  public static long scopeEnter(Object socket, Object channel) {
     long prev = activeId.get()[0];
-    long id = prev != 0 ? prev : channelId(channelLike);
-    setActive(id, prev, "scope:" + channelLike.getClass().getSimpleName());
+    long id = prev != 0 ? prev : channelId(socket);
+    if (channel != null) {
+      channelLineage.put(channel, id);
+    }
+    setActive(id, prev, "scope:" + socket.getClass().getSimpleName());
+    return prev;
+  }
+
+  /** Per-class cache of the getInput() method (for the CIO server's ServerIncomingConnection). */
+  private static final ClassValue<java.lang.reflect.Method> INPUT_OF =
+      new ClassValue<java.lang.reflect.Method>() {
+        @Override
+        protected java.lang.reflect.Method computeValue(Class<?> type) {
+          try {
+            java.lang.reflect.Method m = type.getMethod("getInput");
+            m.setAccessible(true);
+            return m;
+          } catch (Throwable t) {
+            return null;
+          }
+        }
+      };
+
+  /**
+   * CIO server: startServerConnectionPipeline runs in the accept loop, which belongs to no request,
+   * and launches the coroutine that handles every request of the connection. Mount the id the
+   * connection's input channel was attached under, so that coroutine is born with it.
+   */
+  public static long scopeEnterConnection(Object connection) {
+    long prev = activeId.get()[0];
+    try {
+      java.lang.reflect.Method m = INPUT_OF.get(connection.getClass());
+      Long id = m != null ? channelLineage.get(m.invoke(connection)) : null;
+      if (id != null) {
+        setActive(id, prev, "cio-conn");
+      }
+    } catch (Throwable t) {
+      // leave the thread as it was
+    }
     return prev;
   }
 

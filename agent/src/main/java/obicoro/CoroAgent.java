@@ -48,8 +48,9 @@ public final class CoroAgent {
       return;
     }
 
-    // Type validation rejects Kotlin classes whose members are named after Java keywords, e.g.
-    // DefaultIoScheduler (Dispatchers.IO) has a field literally named "default".
+    // Type validation applies Java's naming rules and rejects ordinary Kotlin bytecode: mangled
+    // names such as ServerPipelineKt.startServerConnectionPipeline-exY8QGI, or members named after
+    // Java keywords (DefaultIoScheduler has a field called "default").
     new AgentBuilder.Default(new ByteBuddy().with(TypeValidation.DISABLED))
         .disableClassFormatChanges()
         .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
@@ -85,6 +86,9 @@ public final class CoroAgent {
         // io.netty Runnables are deliberately NOT included: instrumenting event-loop bodies
         // (run() methods that never return) leaves stale mounts on threads and poisons every
         // lineage. Cross-event-loop handoffs are handled by HandlerChannelRead instead.
+        // Scheduler plumbing is excluded too: TaskImpl is a wrapper built on the dispatching thread
+        // and LimitedDispatcher$Worker is a reused drain loop, so neither belongs to one request;
+        // stamping them handed the first request's id to every task they later ran.
         // EventLoopImplBase subtypes are excluded for the same reason: DefaultExecutor is a
         // singleton created lazily by whichever lineage first calls delay(), and its run() is the
         // event-loop body of the DefaultExecutor thread, which never returns: that first lineage
@@ -93,7 +97,9 @@ public final class CoroAgent {
             nameStartsWith("kotlinx.coroutines")
                 .or(nameStartsWith("io.ktor"))
                 .and(isSubTypeOf(Runnable.class))
-                .and(not(hasSuperType(named("kotlinx.coroutines.EventLoopImplBase")))))
+                .and(not(hasSuperType(named("kotlinx.coroutines.EventLoopImplBase"))))
+                .and(not(named("kotlinx.coroutines.scheduling.TaskImpl")))
+                .and(not(named("kotlinx.coroutines.internal.LimitedDispatcher$Worker"))))
         .transform(
             (builder, type, cl, module, pd) ->
                 builder
@@ -101,17 +107,6 @@ public final class CoroAgent {
                     .visit(
                         Advice.to(TaskRun.class)
                             .on(named("run").and(takesArguments(0)).and(not(isAbstract())))))
-        // Dispatch: CoroutineDispatcher (including Ktor subclasses such as NettyDispatcher).
-        .type(hasSuperType(named("kotlinx.coroutines.CoroutineDispatcher")))
-        .transform(
-            (builder, type, cl, module, pd) ->
-                builder.visit(
-                    Advice.to(Dispatched.class)
-                        .on(
-                            named("dispatch")
-                                .or(named("dispatchYield"))
-                                .and(takesArguments(2))
-                                .and(not(isAbstract())))))
         // Connection scope: Netty socket reads (brackets the recv syscall and the inline part of
         // request handling with the channel id, which keys the server-span insert).
         // The NIO and epoll transports are both covered; io_uring and KQueue are not.
@@ -144,6 +139,14 @@ public final class CoroAgent {
                 builder.visit(
                     Advice.to(SocketAttach.class)
                         .on(named("attachForReadingImpl").or(named("attachForWritingImpl")))))
+        // Connection scope: the CIO server starts each connection's request pipeline from the accept
+        // loop; give it the id the connection's socket was attached under.
+        .type(named("io.ktor.server.cio.backend.ServerPipelineKt"))
+        .transform(
+            (builder, type, cl, module, pd) ->
+                builder.visit(
+                    Advice.to(CioPipeline.class)
+                        .on(nameStartsWith("startServerConnectionPipeline"))))
         .installOn(inst);
 
     System.err.println("[obicoro] agent installed");
@@ -154,14 +157,6 @@ public final class CoroAgent {
     @Advice.OnMethodExit(suppress = Throwable.class)
     public static void exit(@Advice.This Object task) {
       Track.created(task);
-    }
-  }
-
-  @SuppressWarnings("unused")
-  public static final class Dispatched {
-    @Advice.OnMethodEnter(suppress = Throwable.class)
-    public static void enter(@Advice.Argument(1) Object task) {
-      Track.dispatched(task);
     }
   }
 
@@ -205,10 +200,23 @@ public final class CoroAgent {
   }
 
   @SuppressWarnings("unused")
+  public static final class CioPipeline {
+    @Advice.OnMethodEnter(suppress = Throwable.class)
+    public static long enter(@Advice.Argument(1) Object connection) {
+      return Track.scopeEnterConnection(connection);
+    }
+
+    @Advice.OnMethodExit(suppress = Throwable.class, onThrowable = Throwable.class)
+    public static void exit(@Advice.Enter long prev) {
+      Track.scopeExit(prev);
+    }
+  }
+
+  @SuppressWarnings("unused")
   public static final class SocketAttach {
     @Advice.OnMethodEnter(suppress = Throwable.class)
-    public static long enter(@Advice.This Object socket) {
-      return Track.scopeEnter(socket);
+    public static long enter(@Advice.This Object socket, @Advice.Argument(0) Object channel) {
+      return Track.scopeEnter(socket, channel);
     }
 
     @Advice.OnMethodExit(suppress = Throwable.class, onThrowable = Throwable.class)
