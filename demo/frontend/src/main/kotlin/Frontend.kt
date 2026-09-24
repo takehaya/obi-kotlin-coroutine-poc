@@ -45,7 +45,11 @@ val vtDispatcher = java.util.concurrent.Executors.newVirtualThreadPerTaskExecuto
 val sharedQueue: Channel<CompletableDeferred<String>> by lazy {
     Channel<CompletableDeferred<String>>(Channel.UNLIMITED).also { queue ->
         CoroutineScope(Dispatchers.IO).launch {
-            for (reply in queue) reply.complete(client.get("$backendUrl/work").bodyAsText())
+            for (reply in queue) {
+                runCatching { client.get("$backendUrl/work").bodyAsText() }
+                    .onSuccess { reply.complete(it) }
+                    .onFailure { reply.completeExceptionally(it) }
+            }
         }
     }
 }

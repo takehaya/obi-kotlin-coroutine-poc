@@ -18,6 +18,9 @@ fun main() {
             }
         }
     }
+    require(!(System.getenv("BACKEND_ENGINE") == "cio" && System.getenv("BACKEND_TLS") == "1")) {
+        "BACKEND_TLS=1 is only implemented for the Netty engine"
+    }
     if (System.getenv("BACKEND_ENGINE") == "cio") {
         embeddedServer(io.ktor.server.cio.CIO, port = 8081, module = module).start(wait = true)
     } else if (System.getenv("BACKEND_TLS") == "1") {
