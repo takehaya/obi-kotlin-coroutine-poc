@@ -4,3 +4,5 @@ agent/dist/
 demo/results*/
 *.log
 .kotlin/
+demo/docker-compose.pin.yml
+demo/results*.tar.gz
