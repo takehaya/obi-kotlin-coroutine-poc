@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -23,7 +24,9 @@ import kotlinx.coroutines.withContext
 // CLIENT_POOL=<n> (CIO only) turns on pipelining over at most n connections, so concurrent
 // requests really share connections; by default CIO opens one connection per call.
 val client: HttpClient = when (System.getenv("CLIENT_ENGINE")) {
-    "okhttp" -> HttpClient(io.ktor.client.engine.okhttp.OkHttp)
+    "okhttp" -> HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
+        engine { config { trustAllForHttpsBackend() } }
+    }
     "java" -> HttpClient(io.ktor.client.engine.java.Java)
     else -> System.getenv("CLIENT_POOL")?.toIntOrNull()?.let { n ->
         HttpClient(CIO) {
@@ -34,6 +37,9 @@ val client: HttpClient = when (System.getenv("CLIENT_ENGINE")) {
         }
     } ?: HttpClient(CIO)
 }
+
+// Coroutines on virtual threads, where OBI's own virtual-thread tracking is active too.
+val vtDispatcher = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor().asCoroutineDispatcher()
 
 // Backend calls made by one app-scoped worker coroutine that the first /shared request starts.
 val sharedQueue: Channel<CompletableDeferred<String>> by lazy {
@@ -90,6 +96,11 @@ fun Application.app() {
             sharedQueue.send(reply)
             call.respondText("shared:${reply.await()}")
         }
+        // (e) the backend call runs in a coroutine dispatched onto virtual threads
+        get("/vt") {
+            val r = withContext(vtDispatcher) { client.get("$backendUrl/work").bodyAsText() }
+            call.respondText("vt:$r")
+        }
         // (c) two parallel calls via async on the IO dispatcher
         get("/parallel") {
             val rs = withContext(Dispatchers.IO) {
@@ -100,4 +111,17 @@ fun Application.app() {
             call.respondText("parallel:${rs.size}")
         }
     }
+}
+
+// The demo's HTTPS backend (BACKEND_TLS=1) uses a throwaway self-signed certificate.
+fun okhttp3.OkHttpClient.Builder.trustAllForHttpsBackend() {
+    if (!backendUrl.startsWith("https")) return
+    val trustAll = object : javax.net.ssl.X509TrustManager {
+        override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+    }
+    val context = javax.net.ssl.SSLContext.getInstance("TLS").apply { init(null, arrayOf(trustAll), null) }
+    sslSocketFactory(context.socketFactory, trustAll)
+    hostnameVerifier { _, _ -> true }
 }
