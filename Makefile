@@ -10,11 +10,15 @@ AGENT_OPTS = -javaagent:/coroagent/coroagent.jar -Dobicoro.native=/coroagent/lib
 RESULTS ?= results
 RESULTS_CONCURRENT ?= results-concurrent
 
-.PHONY: build up up-baseline up-cio up-epoll up-vt load analyze load-concurrent analyze-concurrent down clean
+.PHONY: build check-hooks up up-baseline up-cio up-epoll up-vt load analyze load-concurrent analyze-concurrent down clean
 
 # Build the demo services, the agent jars, and the JNI library.
 build:
 	./build.sh
+
+# Check that every agent hook still matches (no Docker needed; port 8080 must be free).
+check-hooks:
+	demo/check_hooks.sh
 
 # Start the stack with the coroutine agent attached to the frontend.
 up:

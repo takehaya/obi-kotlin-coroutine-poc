@@ -17,7 +17,7 @@ The result, measured with the demo in this repo (OBI v0.10.0, Ktor 3.2.2, plaint
 
 A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines masquerade as virtual threads, using OBI's **existing** ioctl control channel (`k_ioctl_java_vt_mount` / `unmount`). OBI itself is unmodified; the ioctl kprobe accepts the ops because the process is already an instrumented target.
 
-- **Lineage id**: identity hash of the incoming connection object.
+- **Lineage id**: a sequential number assigned to each incoming connection object.
 - **Scopes** (where an id enters a thread): Netty `NioByteUnsafe.read` / `EpollStreamUnsafe.epollInReady` (bracket the recv syscall, keying the server-span insert; the NIO and epoll transports are covered, io_uring and KQueue are not), inbound handlers' `channelRead` (the cross-event-loop handoff is a hidden-class lambda and cannot be instrumented, so the receiving side recovers the id from `ctx.channel()`), ktor-network `NIOSocketImpl.attachFor*Impl` with preserve-or-seed semantics, and the CIO server's `startServerConnectionPipeline`, which launches a connection's request pipeline from the accept loop and gets the id its socket was attached under.
 - **Carry**: constructors of kotlinx/ktor `Runnable`s stamp the current id onto the task, once. A coroutine belongs to the request that launched it; re-stamping on dispatch would hand it the id of whichever request's thread happened to wake it.
 - **Apply**: task `run()` entry mounts the id, exit restores the previous state — no state ever lingers on a thread.
@@ -87,6 +87,8 @@ The load and analysis steps have shortcuts too: `make load RESULTS=<dir>` / `mak
 
 Overhead: start the stack without the agent (`make up-baseline`), run `demo/run_overhead.sh results-overhead agent-off`, restart with the agent (`make up`), run the same script with `agent-on`, then `python3 demo/summarize_overhead.py results-overhead`. It needs `bpftrace` on the PATH (or `BPFTRACE=...`) for the ioctl count.
 
+`make check-hooks` (also run in CI) starts the frontend with the agent on the NIO, epoll and CIO setups without Docker or OBI, and fails if a class the agent depends on is no longer transformed or a transformation error appears.
+
 Traces are also browsable in the Jaeger UI at http://localhost:16686 (compare service `frontend` with the control `jfront`). `OBICORO_DEBUG=1` makes the agent log mounts/stamps to stderr, plus one `transformed <class>` line for every class it instruments (useful to check a hook still matches after a Netty/Ktor upgrade). Transformation errors are always logged, with or without the variable.
 
 ## Layout
@@ -103,7 +105,6 @@ This is a proof of concept, not a production agent.
 - Requests that genuinely share a connection concurrently (HTTP pipelining, HTTP/2 streams) are unmeasured. A per-thread mount names one request at a time, so a single `run()` that serves several requests at once cannot be attributed; this is the case the upstream proposal (state keyed by logical task) is for. The demo could not exercise it: CIO client pipelining against the Netty backend fails for about 3 in 4 requests even without OBI or the agent.
 - A coroutine carries the id of the request it was launched in. A long-lived coroutine launched inside one request and later reused by others (a connection pool's I/O coroutine, an app-scoped worker started lazily) would keep the first request's id.
 - Scope hooks cover Ktor's Netty and CIO engines and the CIO client. On Netty only the NIO and epoll transports are hooked; io_uring and KQueue are not. Other engines/clients/transports need their own scope hooks.
-- The lineage id (31-bit identity hash) can collide in principle.
 - Tied to OBI v0.10.0's ioctl ABI.
 - Only plaintext HTTP/1.1 has been measured. TLS (which goes through OBI's SSL path), HTTP/2 and gRPC are untested.
 - Only Ktor has been exercised. Spring WebFlux with coroutines and other coroutine-based stacks are untested.

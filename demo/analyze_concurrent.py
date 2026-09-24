@@ -30,7 +30,8 @@ for svc in ["frontend", "backend"]:
 def spans_of(trace):
     procs = {pid: pr["serviceName"] for pid, pr in trace["processes"].items()}
     out = []
-    for s in trace["spans"]:
+    # Jaeger occasionally returns the same span twice; count each spanID once.
+    for s in {s["spanID"]: s for s in trace["spans"]}.values():
         kind = next((tag["value"] for tag in s.get("tags", []) if tag["key"] == "span.kind"), "?")
         out.append((procs.get(s["processID"], "?"), kind, s["startTime"], s["startTime"] + s["duration"]))
     return out
