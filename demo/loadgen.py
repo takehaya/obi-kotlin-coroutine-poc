@@ -4,8 +4,13 @@
 One new connection per request, like the curl-based scripts, so every request
 walks the whole accept / handle / close path the agent instruments.
 Usage: loadgen.py URL [--requests N] [--concurrency C] [--warmup W]
+       loadgen.py URL --rate R --duration S      (open loop: fixed arrival rate)
+
+In open-loop mode each request is due at a fixed time and its latency is measured from
+that due time, so a stalling server shows up as latency instead of slowing the load down.
 """
 import argparse
+import concurrent.futures
 import json
 import sys
 import threading
@@ -63,13 +68,58 @@ def pct(latencies, q):
     return latencies[min(len(latencies) - 1, int(q * len(latencies)))] * 1000
 
 
+def run_open_loop(url, rate, duration, workers):
+    """Issues rate req/s for duration seconds. Returns (sorted latencies, errors, sent, wall)."""
+    total = int(rate * duration)
+    interval = 1.0 / rate
+    latencies, errors = [], [0]
+    lock = threading.Lock()
+
+    def one(due):
+        now = time.perf_counter()
+        if due > now:
+            time.sleep(due - now)
+        d = fetch(url)
+        end = time.perf_counter()
+        with lock:
+            if d is None:
+                errors[0] += 1
+            else:
+                latencies.append(end - due)
+
+    t0 = time.perf_counter() + 0.1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for i in range(total):
+            pool.submit(one, t0 + i * interval)
+    wall = time.perf_counter() - t0
+    return sorted(latencies), errors[0], total, wall
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("url")
     p.add_argument("--requests", type=int, default=2000)
     p.add_argument("--concurrency", type=int, default=16)
     p.add_argument("--warmup", type=int, default=200)
+    p.add_argument("--rate", type=float, help="open loop: requests per second")
+    p.add_argument("--duration", type=float, default=20, help="open loop: seconds")
+    p.add_argument("--workers", type=int, default=512, help="open loop: max requests in flight")
     a = p.parse_args()
+
+    if a.rate:
+        latencies, errors, sent, wall = run_open_loop(a.url, a.rate, a.duration, a.workers)
+        print(json.dumps({
+            "mode": "open",
+            "target_rps": a.rate,
+            "requests": sent,
+            "errors": errors,
+            "p50_ms": round(pct(latencies, 0.50), 3),
+            "p95_ms": round(pct(latencies, 0.95), 3),
+            "p99_ms": round(pct(latencies, 0.99), 3),
+            "mean_ms": round(sum(latencies) / len(latencies) * 1000, 3) if latencies else 0.0,
+            "rps": round((sent - errors) / wall, 1) if wall else 0.0,
+        }))
+        return 1 if errors > sent * 0.01 else 0
 
     run(a.url, a.warmup, a.concurrency)  # discarded: JIT warm-up, pool fill
     latencies, errors, wall = run(a.url, a.requests, a.concurrency)
