@@ -43,14 +43,17 @@ def sequential(path):
 
 def concurrent(path):
     """condition -> 'connected, mis-parented' from analyze_concurrent.py output."""
-    out, cond = {}, None
+    out, cond, servers = {}, None, {}
     for line in path.read_text().splitlines():
         m = re.match(r"===== (\S+) =====", line)
         if m:
             cond = m.group(1)
+        m = re.search(r"total server spans: (\d+)", line)
+        if m and cond:
+            servers[cond] = m.group(1)
         m = re.search(r"fully connected \(server\+client\+backend\): (\d+)", line)
         if m and cond:
-            out[cond] = m.group(1)
+            out[cond] = f"{m.group(1)}/{servers.get(cond, '?')}"
         m = re.search(r"extra_clients=(\d+)", line)
         if m and cond:
             out[cond] += f" (mis-parented {m.group(1)})"
@@ -96,11 +99,18 @@ ol = R / "openloop.tsv"
 if ol.exists():
     rows = list(csv.DictReader(ol.open(), delimiter="\t"))
     print("## Open-loop /direct\n")
-    print("| target req/s | label | achieved req/s | errors | p50 ms | p99 ms | CPU ms / request |")
-    print("|---|---|---|---|---|---|---|")
+    print("| target req/s | label | achieved req/s | errors | p50 ms | p99 ms | CPU ms / request | late starts |")
+    print("|---|---|---|---|---|---|---|---|")
     for r in sorted(rows, key=lambda r: (float(r["target_rps"]), r["label"])):
-        print(f"| {r['target_rps']} | {r['label']} | {r['rps']} | {r['errors']} | {r['p50_ms']} | {r['p99_ms']} | {r['cpu_ms_per_req']} |")
+        print(f"| {r['target_rps']} | {r['label']} | {r['rps']} | {r['errors']} | {r['p50_ms']} | {r['p99_ms']} | {r['cpu_ms_per_req']} | {r.get('late_starts', '-')} |")
     print()
+    late = [r for r in rows if int(r.get("late_starts") or 0) > 0.01 * int(r["requests"])]
+    if late:
+        print("- WARNING: over 1% of requests started late at "
+              + ", ".join(f"{r['label']} {r['target_rps']}" for r in late)
+              + ". Either the load generator ran out of CPU, or a stalled server filled all its"
+              " in-flight slots; check the load generator's CPU before reading these rows as"
+              " server capacity\n")
     for label in ("agent-off", "agent-on"):
         ok = [float(r["target_rps"]) for r in rows if r["label"] == label
               and int(r["errors"]) <= 0.01 * int(r["requests"]) and float(r["p99_ms"]) < 200]

@@ -72,13 +72,16 @@ def run_open_loop(url, rate, duration, workers):
     """Issues rate req/s for duration seconds. Returns (sorted latencies, errors, sent, wall)."""
     total = int(rate * duration)
     interval = 1.0 / rate
-    latencies, errors = [], [0]
+    latencies, errors, late = [], [0], [0]
     lock = threading.Lock()
 
     def one(due):
         now = time.perf_counter()
         if due > now:
             time.sleep(due - now)
+        elif now - due > 0.005:
+            with lock:
+                late[0] += 1  # the load generator itself fell behind its schedule
         d = fetch(url)
         end = time.perf_counter()
         with lock:
@@ -92,7 +95,7 @@ def run_open_loop(url, rate, duration, workers):
         for i in range(total):
             pool.submit(one, t0 + i * interval)
     wall = time.perf_counter() - t0
-    return sorted(latencies), errors[0], total, wall
+    return sorted(latencies), errors[0], total, wall, late[0]
 
 
 def main():
@@ -107,7 +110,7 @@ def main():
     a = p.parse_args()
 
     if a.rate:
-        latencies, errors, sent, wall = run_open_loop(a.url, a.rate, a.duration, a.workers)
+        latencies, errors, sent, wall, late = run_open_loop(a.url, a.rate, a.duration, a.workers)
         print(json.dumps({
             "mode": "open",
             "target_rps": a.rate,
@@ -118,6 +121,7 @@ def main():
             "p99_ms": round(pct(latencies, 0.99), 3),
             "mean_ms": round(sum(latencies) / len(latencies) * 1000, 3) if latencies else 0.0,
             "rps": round((sent - errors) / wall, 1) if wall else 0.0,
+            "late_starts": late,
         }))
         return 1 if errors > sent * 0.01 else 0
 

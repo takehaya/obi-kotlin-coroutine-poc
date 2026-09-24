@@ -40,9 +40,10 @@ services:
   backend:  { cpuset: "$BACK_CPUS" }
   jfront:   { cpuset: "$BACK_CPUS" }
   jaeger:   { cpuset: "$BACK_CPUS" }
+  obi:      { cpuset: "$BACK_CPUS" }
 EOF
     export COMPOSE_FILE=docker-compose.yml:docker-compose.pin.yml
-    log "pinning: frontend $FRONT_CPUS, backend/jaeger $BACK_CPUS, load generator $LOAD_CPUS (of $N)"
+    log "pinning: frontend $FRONT_CPUS, backend/jaeger/obi $BACK_CPUS, load generator $LOAD_CPUS (of $N)"
 else
     log "pinning off ($N CPUs)"
 fi
@@ -63,13 +64,22 @@ LOAD="taskset -c $LOAD_CPUS"
 } > "$OUT/env.txt"
 
 compose() { (cd demo && sudo -E docker compose "$@"); }
-up() {  # <java opts> [extra env assignments...]
+up() {  # <java opts> [extra env assignments...]; aborts the run if the stack does not serve
     local opts=$1; shift
-    compose down > /dev/null 2>&1
-    (cd demo && env "$@" FRONTEND_JAVA_OPTS="$opts" sudo -E docker compose up -d > /dev/null 2>&1)
+    compose down >> "$OUT/measure.log" 2>&1
+    if ! (cd demo && env "$@" FRONTEND_JAVA_OPTS="$opts" sudo -E docker compose up -d) >> "$OUT/measure.log" 2>&1; then
+        log "FATAL: docker compose up failed (see above)"; exit 1
+    fi
     sleep 25
     for _ in 1 2 3; do for ep in direct hop parallel; do curl -s -m 10 -o /dev/null "http://localhost:8080/$ep"; done; done
+    if [ "$(curl -s -m 10 -o /dev/null -w '%{http_code}' http://localhost:8080/direct)" != 200 ]; then
+        log "FATAL: frontend does not answer /direct with 200"; compose logs --no-color --tail 50 >> "$OUT/measure.log" 2>&1; exit 1
+    fi
     sleep 5
+}
+step() {  # <name> <command...>: runs a helper, keeps its output in the log, reports failures
+    local name=$1; shift
+    "$@" >> "$OUT/measure.log" 2>&1 || log "WARNING: $name exited with $?"
 }
 frontend_pid() { (cd demo && sudo docker inspect -f '{{.State.Pid}}' "$(sudo docker compose ps -q frontend)"); }
 cpu_ticks() { sudo awk '{ sub(/^.*\) /, ""); print $12 + $13 }' "/proc/$1/stat"; }
@@ -80,10 +90,11 @@ if ! skipped correctness; then
         case $variant in nio) extra=();; epoll) extra=(NETTY_TRANSPORT=epoll);; cio) extra=(KTOR_ENGINE=cio);; esac
         log "correctness: $variant"
         up "$AGENT" "${extra[@]}"
-        $LOAD demo/run_conditions.sh "$NAME/seq-$variant" > /dev/null 2>&1
-        python3 demo/analyze_jaeger.py "$NAME/seq-$variant" > "$OUT/seq-$variant/analysis.txt"
-        $LOAD demo/run_concurrent.sh "$NAME/conc-$variant" > /dev/null 2>&1
-        python3 demo/analyze_concurrent.py "$NAME/conc-$variant" > "$OUT/conc-$variant/analysis.txt"
+        mkdir -p "$OUT/seq-$variant" "$OUT/conc-$variant"
+        step "run_conditions ($variant)" $LOAD demo/run_conditions.sh "$NAME/seq-$variant"
+        python3 demo/analyze_jaeger.py "$NAME/seq-$variant" > "$OUT/seq-$variant/analysis.txt" 2>> "$OUT/measure.log"
+        step "run_concurrent ($variant)" $LOAD demo/run_concurrent.sh "$NAME/conc-$variant"
+        python3 demo/analyze_concurrent.py "$NAME/conc-$variant" > "$OUT/conc-$variant/analysis.txt" 2>> "$OUT/measure.log"
         compose logs --no-color frontend 2>&1 | grep -c 'transform error' | sed 's/^/transform errors: /' >> "$OUT/conc-$variant/analysis.txt"
     done
 fi
@@ -95,7 +106,7 @@ if ! skipped overhead; then
         for label in $order; do
             log "overhead round $r: $label"
             if [ "$label" = agent-on ]; then up "$AGENT"; else up ""; fi
-            $LOAD demo/run_overhead.sh "$NAME/overhead" "$label" > /dev/null 2>> "$OUT/measure.log"
+            step "run_overhead ($label)" $LOAD demo/run_overhead.sh "$NAME/overhead" "$label"
         done
     done
 fi
@@ -103,9 +114,11 @@ fi
 # ---- 3. open-loop saturation ----------------------------------------------------------------
 if ! skipped openloop; then
     TSV=$OUT/openloop.tsv
-    printf 'label\tendpoint\ttarget_rps\trequests\terrors\tp50_ms\tp95_ms\tp99_ms\trps\tcpu_ms_per_req\n' > "$TSV"
+    printf 'label\tendpoint\ttarget_rps\trequests\terrors\tp50_ms\tp95_ms\tp99_ms\trps\tcpu_ms_per_req\tlate_starts\n' > "$TSV"
+    # ponytail: labels always run off then on, rates ascending; alternate the order if drift shows up
     for label in agent-off agent-on; do
         if [ "$label" = agent-on ]; then up "$AGENT"; else up ""; fi
+        $LOAD python3 demo/loadgen.py http://localhost:8080/direct --requests "$WARMUP" --concurrency "$CONCURRENCY" --warmup 0 > /dev/null
         pid=$(frontend_pid)
         for rate in $RATES; do
             log "open loop: $label /direct at $rate req/s"
@@ -116,7 +129,7 @@ if ! skipped openloop; then
 d = json.load(sys.stdin); label, rate, ticks, hz = sys.argv[1:]
 ok = d["requests"] - d["errors"]
 cpu = (int(ticks) / int(hz)) * 1000 / ok if ok else 0
-print("\t".join(str(v) for v in [label, "direct", rate, d["requests"], d["errors"], d["p50_ms"], d["p95_ms"], d["p99_ms"], d["rps"], round(cpu, 3)]))' \
+print("\t".join(str(v) for v in [label, "direct", rate, d["requests"], d["errors"], d["p50_ms"], d["p95_ms"], d["p99_ms"], d["rps"], round(cpu, 3), d["late_starts"]]))' \
                 "$label" "$rate" "$((t1 - t0))" "$(getconf CLK_TCK)" >> "$TSV"
             sleep 5
         done
