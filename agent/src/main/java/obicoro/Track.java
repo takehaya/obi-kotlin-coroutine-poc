@@ -73,10 +73,23 @@ public final class Track {
     log("initialized, tid=" + Native.gettid0());
   }
 
-  /** Derives a 31-bit logical id from a connection object (the BPF side uses the low 31 bits). */
+  /** The 31-bit logical id of a connection object (the BPF side uses the low 31 bits). */
   private static long channelId(Object o) {
-    int h = System.identityHashCode(o) & 0x7FFFFFFF;
-    return h == 0 ? 1 : h;
+    return connectionIds.computeIfAbsent(o, k -> nextConnectionId());
+  }
+
+  /**
+   * connection object -> sequential id. Identity hashes can collide between two live connections;
+   * a counter cannot until 2^31 connections, far past any two being in flight at once.
+   */
+  private static final Map<Object, Long> connectionIds =
+      Collections.synchronizedMap(new WeakHashMap<Object, Long>());
+
+  private static final AtomicInteger connectionSeq = new AtomicInteger();
+
+  private static long nextConnectionId() {
+    int n = connectionSeq.incrementAndGet() & 0x7FFFFFFF;
+    return n == 0 ? nextConnectionId() : n;
   }
 
   // ---- carrying the id along the task graph ----
