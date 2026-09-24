@@ -1,7 +1,7 @@
 #!/bin/bash
 # Boots an Ubuntu 24.04 cloud-image VM under KVM on host CPUs that nothing else should use,
 # with this repository's measurement in mind. Needs qemu-system-x86_64, cloud-localds (from
-# cloud-image-utils), /dev/kvm and an SSH public key.
+# cloud-image-utils), /dev/kvm (qemu runs via sudo if it is not writable) and an SSH public key.
 #
 # Usage: vm/run-qemu.sh
 # Env:   VM_DIR=~/.cache/obi-bench-vm  HOST_CPUS=8-15 (host cores to pin the VM to)
@@ -37,7 +37,9 @@ cloud-localds seed.img user-data
 echo "booting: $VCPUS vCPUs pinned to host CPUs $HOST_CPUS, $MEM, ssh -p $SSH_PORT ubuntu@localhost"
 # taskset keeps the whole VM, including its vCPU threads, on HOST_CPUS. Pick cores other
 # workloads on the host do not use, or the measurement inherits their noise.
-exec taskset -c "$HOST_CPUS" qemu-system-x86_64 \
+# /dev/kvm is usually group kvm; without membership, run qemu (and only qemu) through sudo.
+SUDO=; [ -w /dev/kvm ] || SUDO=sudo
+exec $SUDO taskset -c "$HOST_CPUS" qemu-system-x86_64 \
     -enable-kvm -cpu host -smp "$VCPUS" -m "$MEM" \
     -drive file=disk.qcow2,if=virtio -drive file=seed.img,if=virtio,format=raw \
     -netdev user,id=n0,hostfwd=tcp::"$SSH_PORT"-:22 -device virtio-net-pci,netdev=n0 \
