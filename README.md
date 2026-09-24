@@ -33,6 +33,9 @@ A standalone `-javaagent` (ByteBuddy + a ~40-line JNI shim) makes coroutines mas
 | concurrency 16, `/direct` (200 req), NIO / CIO / epoll | 0 | **200/200** |
 | concurrency 16, `/hop` (200 req), NIO / CIO / epoll | 0 | **200/200** |
 | concurrency 8, `/parallel` (100 req), NIO / CIO / epoll | 0 | **100/100** |
+| OkHttp client instead of CIO, sequential and concurrency 16 | 0/10, 0 | **10/10, 200/200** |
+| Java `HttpClient` instead of CIO, sequential | 0/10 | 0/10 (not supported) |
+| `/shared`: backend called by one long-lived worker coroutine | 0/10 | 0/10 (expected limit, see below) |
 
 The concurrent rows held in three runs each on NIO and CIO and one on epoll, with no mis-parented client span in any of them. Controls under the same OBI, agent not involved: the thread-per-request plain-Java service connects 10/10, and so does the same service on a virtual-thread-per-task executor (OBI's own virtual-thread support, `make up-vt`). The analyzer output behind every row is in [`demo/reference-results/`](demo/reference-results/).
 
@@ -81,6 +84,7 @@ Variants are switched with an environment variable on the `up` line (e.g. `KTOR_
 - `KTOR_ENGINE=cio` — frontend server engine, Netty by default (`make up-cio`).
 - `NETTY_TRANSPORT=epoll` — Netty's native epoll transport, NIO by default (`make up-epoll`).
 - `JFRONT_EXECUTOR=virtual` — plain-Java control service on a JDK 21 virtual-thread-per-task executor (`make up-vt`).
+- `CLIENT_ENGINE=okhttp` or `java` — the frontend's backend client (CIO by default); `CLIENT_POOL=<n>` turns on CIO pipelining over n connections; `BACKEND_ENGINE=cio` switches the backend's server engine.
 - `OBICORO_DEBUG=1` — agent debug logging, see below.
 
 The load and analysis steps have shortcuts too: `make load RESULTS=<dir>` / `make analyze RESULTS=<dir>`, and `make load-concurrent` / `make analyze-concurrent`.
@@ -102,8 +106,9 @@ demo/    4-service topology (compose), OBI config, load & analysis scripts
 
 This is a proof of concept, not a production agent.
 
-- Requests that genuinely share a connection concurrently (HTTP pipelining, HTTP/2 streams) are unmeasured. A per-thread mount names one request at a time, so a single `run()` that serves several requests at once cannot be attributed; this is the case the upstream proposal (state keyed by logical task) is for. The demo could not exercise it: CIO client pipelining against the Netty backend fails for about 3 in 4 requests even without OBI or the agent.
-- A coroutine carries the id of the request it was launched in. A long-lived coroutine launched inside one request and later reused by others (a connection pool's I/O coroutine, an app-scoped worker started lazily) would keep the first request's id.
+- Requests that genuinely share a connection concurrently (HTTP pipelining, HTTP/2 streams) are unmeasured. A per-thread mount names one request at a time, so a single `run()` that serves several requests at once cannot be attributed; this is the case the upstream proposal (state keyed by logical task) is for. The demo could not exercise it: CIO client pipelining (`CLIENT_POOL=4`) fails for most requests even without OBI or the agent, against a Netty backend (78 of 100 returned 500) and a CIO backend (`BACKEND_ENGINE=cio`, 49 returned 500 and 18 timed out).
+- A coroutine carries the id of the request it was launched in. A long-lived coroutine launched inside one request and later reused by others keeps the first request's id; `/shared` (an app-scoped worker started by the first request) reproduces this: its client spans lose their parent, 0/10.
+- Backend clients: Ktor CIO and OkHttp are covered. The JDK's `HttpClient` (Ktor's Java engine) is not: it writes from its own selector thread inside `java.net.http`, and every request splits.
 - Scope hooks cover Ktor's Netty and CIO engines and the CIO client. On Netty only the NIO and epoll transports are hooked; io_uring and KQueue are not. Other engines/clients/transports need their own scope hooks.
 - Tied to OBI v0.10.0's ioctl ABI.
 - Only plaintext HTTP/1.1 has been measured. TLS (which goes through OBI's SSL path), HTTP/2 and gRPC are untested.

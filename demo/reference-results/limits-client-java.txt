@@ -1,0 +1,16 @@
+
+===== condition: direct =====
+   10 traces: ['backend/server:GET /work', 'frontend/client:GET /work']
+   10 traces: ['frontend/internal:in queue', 'frontend/internal:processing', 'frontend/server:GET /direct']
+
+===== condition: hop =====
+   10 traces: ['frontend/internal:in queue', 'frontend/internal:processing', 'frontend/server:GET /hop']
+   10 traces: ['backend/server:GET /work', 'frontend/client:GET /work']
+
+===== condition: parallel =====
+   20 traces: ['backend/server:GET /work', 'frontend/client:GET /work']
+   10 traces: ['frontend/internal:in queue', 'frontend/internal:processing', 'frontend/server:GET /parallel']
+
+===== condition: shared =====
+   10 traces: ['backend/server:GET /work', 'frontend/client:GET /work']
+   10 traces: ['frontend/internal:in queue', 'frontend/internal:processing', 'frontend/server:GET /shared']
