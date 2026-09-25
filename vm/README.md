@@ -25,7 +25,7 @@ vm/setup.sh     # Docker, JDK 21, gcc, python3, bpftrace; pulls the images, buil
 ## 3. Measure
 
 ```bash
-vm/measure.sh                       # about 1.5 hours with the defaults
+vm/measure.sh                       # about 30 minutes with the defaults
 ```
 
 It runs three phases and writes everything to `demo/results-vm-<time>/`, plus a `.tar.gz` of it without the raw Jaeger JSON:
@@ -39,5 +39,7 @@ It runs three phases and writes everything to `demo/results-vm-<time>/`, plus a 
 `summary.md` has the tables (medians with min–max over rounds) and `env.txt` records the kernel, CPUs, pinning and what else was running when the run started.
 
 Knobs, all environment variables: `ROUNDS` (5), `REQUESTS` (4000), `CONCURRENCY` (16), `WARMUP` (300), `RATES` ("300 600 900 1200 1500"), `DURATION` (20 s per rate), `PIN` (`auto`: on with 8+ CPUs), `SKIP` (e.g. `SKIP=correctness`).
+
+The open-loop sweep needs a load generator faster than the server: on an 8-vCPU guest its two vCPUs fell behind from 900 req/s, so give the machine more vCPUs (the load generator gets a quarter of them) before reading the sweep as server capacity.
 
 Compare agent off and agent on within one run only; a VM adds its own virtualization overhead, so its absolute numbers are not comparable with bare-metal ones.
