@@ -105,6 +105,12 @@ def run_open_loop(url, rate, duration, workers, t0, offset=0.0):
     return latencies, errors, total, late[0]
 
 
+def tcp_ext():
+    """TcpExt counters of this network namespace (/proc/net/netstat)."""
+    lines = [l.split() for l in open("/proc/net/netstat") if l.startswith("TcpExt:")]
+    return dict(zip(lines[0][1:], map(int, lines[1][1:]))) if len(lines) == 2 else {}
+
+
 def _open_loop_proc(args):
     return run_open_loop(*args)
 
@@ -123,6 +129,7 @@ def main():
     a = p.parse_args()
 
     if a.rate:
+        before = tcp_ext()
         procs = max(1, a.procs)
         t0 = time.monotonic() + 0.5
         # Each process takes rate/procs, its schedule shifted so the arrivals interleave.
@@ -136,6 +143,7 @@ def main():
         errors = sum(kinds.values())
         sent = sum(part[2] for part in parts)
         late = sum(part[3] for part in parts)
+        after = tcp_ext()
         print(json.dumps({
             "mode": "open",
             "target_rps": a.rate,
@@ -149,6 +157,8 @@ def main():
             "late_starts": late,
             "procs": procs,
             "error_kinds": dict(kinds.most_common(3)),
+            # SYNs this client had to resend: a connection attempt dropped somewhere on the way.
+            "syn_retrans": after.get("TCPSynRetrans", 0) - before.get("TCPSynRetrans", 0),
         }))
         return 1 if errors > sent * 0.01 else 0
 

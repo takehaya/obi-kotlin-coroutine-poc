@@ -40,7 +40,9 @@ It runs three phases and writes everything to `demo/results-vm-<time>/`, plus a 
 
 Knobs, all environment variables: `ROUNDS` (5), `REQUESTS` (4000), `CONCURRENCY` (16), `WARMUP` (300), `RATES` ("300 600 900 1200 1500"), `DURATION` (20 s per rate), `STEP_GAP` (60 s between rates), `PIN` (`auto`: on with 8+ CPUs), `SKIP` (e.g. `SKIP=correctness,overhead` for the sweep alone).
 
-Every request opens a new connection, and closed connections hold their source port in TIME_WAIT for 60 s, so the default 28k-port range caps new connections to one destination near 470/s. `measure.sh` therefore widens `net.ipv4.ip_local_port_range` to 1024–65535 and sets `net.ipv4.tcp_tw_reuse=1`, on the machine (restored on exit) and in the frontend container, and waits `STEP_GAP` between rates. Do not run it on a host whose services bind ports in that range. The open-loop load generator runs one process per load-generator CPU.
+Every request opens a new connection, and closed connections hold their source port in TIME_WAIT for 60 s, so the default 28k-port range caps new connections to one destination near 470/s. `measure.sh` therefore widens `net.ipv4.ip_local_port_range` to 1024–65535 and sets `net.ipv4.tcp_tw_reuse=1`, on the machine (restored on exit) and in the frontend container, and waits `STEP_GAP` between rates. Do not run it on a host whose services bind ports in that range. The open-loop load generator runs in a container on the compose network (`python:3.12-slim`), one process per load-generator CPU, and calls the frontend by IP, so it bypasses Docker's userland proxy on the published port.
+
+Each open-loop row also records SYN retransmissions seen by the load generator, listen-queue overflows in the frontend's network namespace, and the VM's steal time. Steal above 2% means the host ran something else on the VM's CPUs during that step; `summary.md` marks those rows.
 
 The open-loop sweep needs a load generator faster than the server. Check the `late starts` column: if requests started late while errors stayed at zero, the load generator was the limit. 16 vCPUs give it four processes.
 

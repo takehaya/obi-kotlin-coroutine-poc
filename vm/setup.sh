@@ -18,6 +18,7 @@ sudo systemctl enable --now docker
 
 # Pull the images once so the first measurement does not include download time.
 (cd demo && sudo docker compose pull -q)
+sudo docker pull -q python:3.12-slim   # the open-loop load generator's container
 
 ./build.sh
 demo/check_hooks.sh

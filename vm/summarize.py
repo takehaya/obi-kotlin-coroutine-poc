@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 R = Path(sys.argv[1])
+STEAL_LIMIT = 2.0  # % of CPU time the hypervisor gave to others during a step
 
 
 def fmt(values):
@@ -99,10 +100,11 @@ ol = R / "openloop.tsv"
 if ol.exists():
     rows = list(csv.DictReader(ol.open(), delimiter="\t"))
     print("## Open-loop /direct\n")
-    print("| target req/s | label | achieved req/s | errors | p50 ms | p99 ms | CPU ms / request | late starts | error kinds |")
-    print("|---|---|---|---|---|---|---|---|---|")
+    print("| target req/s | label | achieved req/s | errors | p50 ms | p99 ms | CPU ms / request | late starts | SYN resends | listen overflows | steal % |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     for r in sorted(rows, key=lambda r: (float(r["target_rps"]), r["label"])):
-        print(f"| {r['target_rps']} | {r['label']} | {r['rps']} | {r['errors']} | {r['p50_ms']} | {r['p99_ms']} | {r['cpu_ms_per_req']} | {r.get('late_starts', '-')} | {r.get('error_kinds', '-')} |")
+        noisy = " (host contention)" if float(r.get("steal_pct") or 0) > STEAL_LIMIT else ""
+        print(f"| {r['target_rps']} | {r['label']} | {r['rps']} | {r['errors']} | {r['p50_ms']} | {r['p99_ms']} | {r['cpu_ms_per_req']} | {r.get('late_starts', '-')} | {r.get('syn_retrans', '-')} | {r.get('listen_overflows', '-')} | {r.get('steal_pct', '-')}{noisy} |")
     print()
     late = [r for r in rows if int(r.get("late_starts") or 0) > 0.01 * int(r["requests"])]
     if late:
@@ -111,6 +113,10 @@ if ol.exists():
               + ". Either the load generator ran out of CPU, or a stalled server filled all its"
               " in-flight slots; check the load generator's CPU before reading these rows as"
               " server capacity\n")
+    noisy = [r for r in rows if float(r.get("steal_pct") or 0) > STEAL_LIMIT]
+    if noisy:
+        print(f"- WARNING: steal above {STEAL_LIMIT}% (the host ran something else on our CPUs) at "
+              + ", ".join(f"{r['label']} {r['target_rps']}" for r in noisy) + "; do not compare those rows\n")
     for label in ("agent-off", "agent-on"):
         ok = [float(r["target_rps"]) for r in rows if r["label"] == label
               and int(r["errors"]) <= 0.01 * int(r["requests"]) and float(r["p99_ms"]) < 200]
