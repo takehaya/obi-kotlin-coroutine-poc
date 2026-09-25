@@ -17,6 +17,7 @@ NAME=${1:-results-vm-$(date +%Y%m%d-%H%M%S)}
 OUT=demo/$NAME
 ROUNDS=${ROUNDS:-5}
 RATES=${RATES:-300 600 900 1200 1500}
+LOADGEN_IMAGE=${LOADGEN_IMAGE:-python:3.12-slim}
 DURATION=${DURATION:-20}
 STEP_GAP=${STEP_GAP:-60}
 SKIP=${SKIP:-}
@@ -101,6 +102,13 @@ step() {  # <name> <command...>: runs a helper, keeps its output in the log, rep
 }
 frontend_pid() { (cd demo && sudo docker inspect -f '{{.State.Pid}}' "$(sudo docker compose ps -q frontend)"); }
 cpu_ticks() { sudo awk '{ sub(/^.*\) /, ""); print $12 + $13 }' "/proc/$1/stat"; }
+# "steal total" jiffies of this machine: steal is time the hypervisor gave our vCPUs to others.
+steal_total() { awk '/^cpu / { t = 0; for (i = 2; i <= NF; i++) t += $i; print $9, t }' /proc/stat; }
+# ListenOverflows ListenDrops of a process's network namespace (the frontend container).
+listen_drops() {
+    sudo cat "/proc/$1/net/netstat" | awk '/^TcpExt:/ { if (!n) { for (i = 2; i <= NF; i++) k[i] = $i; n = 1 }
+        else { for (i = 2; i <= NF; i++) v[k[i]] = $i; print v["ListenOverflows"] + 0, v["ListenDrops"] + 0 } }'
+}
 
 # ---- 1. correctness -------------------------------------------------------------------------
 if ! skipped correctness; then
@@ -132,24 +140,37 @@ fi
 # ---- 3. open-loop saturation ----------------------------------------------------------------
 if ! skipped openloop; then
     TSV=$OUT/openloop.tsv
-    printf 'label\tendpoint\ttarget_rps\trequests\terrors\tp50_ms\tp95_ms\tp99_ms\trps\tcpu_ms_per_req\tlate_starts\terror_kinds\n' > "$TSV"
+    printf 'label\tendpoint\ttarget_rps\trequests\terrors\tp50_ms\tp95_ms\tp99_ms\trps\tcpu_ms_per_req\tlate_starts\terror_kinds\tsyn_retrans\tlisten_overflows\tlisten_drops\tsteal_pct\n' > "$TSV"
+    # The load generator runs in a container on the compose network and calls the frontend
+    # directly, not through the published port and Docker's userland proxy on the machine.
+    NET=$(sudo docker network ls --format '{{.Name}}' | grep -m1 '_expnet$')
+    loadgen() {
+        sudo docker run --rm --network "$NET" --cpuset-cpus "$LOAD_CPUS" \
+            --sysctl net.ipv4.ip_local_port_range="1024 65535" --sysctl net.ipv4.tcp_tw_reuse=1 \
+            -v "$PWD/demo:/demo:ro" "$LOADGEN_IMAGE" python3 /demo/loadgen.py "$@"
+    }
     # ponytail: labels always run off then on, rates ascending; alternate the order if drift shows up
     for label in agent-off agent-on; do
         if [ "$label" = agent-on ]; then up "$AGENT"; else up ""; fi
-        $LOAD python3 demo/loadgen.py http://localhost:8080/direct --requests "$WARMUP" --concurrency "$CONCURRENCY" --warmup 0 > /dev/null
         pid=$(frontend_pid)
+        # By IP: a name would be resolved through Docker's DNS on every request.
+        FRONT=http://$(cd demo && sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(sudo docker compose ps -q frontend)"):8080/direct
+        loadgen "$FRONT" --requests "$WARMUP" --concurrency "$CONCURRENCY" --warmup 0 > /dev/null
         for rate in $RATES; do
             log "open loop: $label /direct at $rate req/s"
-            t0=$(cpu_ticks "$pid")
-            json=$($LOAD python3 demo/loadgen.py http://localhost:8080/direct --rate "$rate" --duration "$DURATION" --procs "$LOAD_PROCS")
-            t1=$(cpu_ticks "$pid")
+            t0=$(cpu_ticks "$pid"); s0=$(steal_total); d0=$(listen_drops "$pid")
+            json=$(loadgen "$FRONT" --rate "$rate" --duration "$DURATION" --procs "$LOAD_PROCS")
+            t1=$(cpu_ticks "$pid"); s1=$(steal_total); d1=$(listen_drops "$pid")
+            diag=$(awk -v s0="$s0" -v s1="$s1" -v d0="$d0" -v d1="$d1" 'BEGIN {
+                split(s0, a, " "); split(s1, b, " "); split(d0, c, " "); split(d1, d, " ")
+                printf "%d\t%d\t%.2f", d[1] - c[1], d[2] - c[2], (b[2] > a[2]) ? 100 * (b[1] - a[1]) / (b[2] - a[2]) : 0 }')
             printf '%s' "$json" | python3 -c 'import json, sys
-d = json.load(sys.stdin); label, rate, ticks, hz = sys.argv[1:]
+d = json.load(sys.stdin); label, rate, ticks, hz, diag = sys.argv[1:]
 ok = d["requests"] - d["errors"]
 cpu = (int(ticks) / int(hz)) * 1000 / ok if ok else 0
 kinds = ",".join(f"{k}:{n}" for k, n in d.get("error_kinds", {}).items()) or "-"
-print("\t".join(str(v) for v in [label, "direct", rate, d["requests"], d["errors"], d["p50_ms"], d["p95_ms"], d["p99_ms"], d["rps"], round(cpu, 3), d["late_starts"], kinds]))' \
-                "$label" "$rate" "$((t1 - t0))" "$(getconf CLK_TCK)" >> "$TSV"
+print("\t".join(str(v) for v in [label, "direct", rate, d["requests"], d["errors"], d["p50_ms"], d["p95_ms"], d["p99_ms"], d["rps"], round(cpu, 3), d["late_starts"], kinds, d.get("syn_retrans", "-")]) + "\t" + diag)' \
+                "$label" "$rate" "$((t1 - t0))" "$(getconf CLK_TCK)" "$diag" >> "$TSV"
             sleep "$STEP_GAP"   # let the step's TIME_WAIT sockets expire before the next one
         done
     done
