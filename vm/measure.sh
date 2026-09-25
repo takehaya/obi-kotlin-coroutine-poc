@@ -143,7 +143,6 @@ if ! skipped openloop; then
     printf 'label\tendpoint\ttarget_rps\trequests\terrors\tp50_ms\tp95_ms\tp99_ms\trps\tcpu_ms_per_req\tlate_starts\terror_kinds\tsyn_retrans\tlisten_overflows\tlisten_drops\tsteal_pct\n' > "$TSV"
     # The load generator runs in a container on the compose network and calls the frontend
     # directly, not through the published port and Docker's userland proxy on the machine.
-    NET=$(sudo docker network ls --format '{{.Name}}' | grep -m1 '_expnet$')
     loadgen() {
         sudo docker run --rm --network "$NET" --cpuset-cpus "$LOAD_CPUS" \
             --sysctl net.ipv4.ip_local_port_range="1024 65535" --sysctl net.ipv4.tcp_tw_reuse=1 \
@@ -153,6 +152,7 @@ if ! skipped openloop; then
     for label in agent-off agent-on; do
         if [ "$label" = agent-on ]; then up "$AGENT"; else up ""; fi
         pid=$(frontend_pid)
+        NET=$(sudo docker network ls --format '{{.Name}}' | grep -m1 '_expnet$')   # exists only once the stack is up
         # By IP: a name would be resolved through Docker's DNS on every request.
         FRONT=http://$(cd demo && sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(sudo docker compose ps -q frontend)"):8080/direct
         loadgen "$FRONT" --requests "$WARMUP" --concurrency "$CONCURRENCY" --warmup 0 > /dev/null
@@ -161,6 +161,7 @@ if ! skipped openloop; then
             t0=$(cpu_ticks "$pid"); s0=$(steal_total); d0=$(listen_drops "$pid")
             json=$(loadgen "$FRONT" --rate "$rate" --duration "$DURATION" --procs "$LOAD_PROCS")
             t1=$(cpu_ticks "$pid"); s1=$(steal_total); d1=$(listen_drops "$pid")
+            if [ -z "$json" ]; then log "WARNING: load generator returned nothing at $label $rate req/s"; continue; fi
             diag=$(awk -v s0="$s0" -v s1="$s1" -v d0="$d0" -v d1="$d1" 'BEGIN {
                 split(s0, a, " "); split(s1, b, " "); split(d0, c, " "); split(d1, d, " ")
                 printf "%d\t%d\t%.2f", d[1] - c[1], d[2] - c[2], (b[2] > a[2]) ? 100 * (b[1] - a[1]) / (b[2] - a[2]) : 0 }')
