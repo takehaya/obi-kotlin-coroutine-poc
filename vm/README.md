@@ -38,8 +38,10 @@ It runs three phases and writes everything to `demo/results-vm-<time>/`, plus a 
 
 `summary.md` has the tables (medians with min–max over rounds) and `env.txt` records the kernel, CPUs, pinning and what else was running when the run started.
 
-Knobs, all environment variables: `ROUNDS` (5), `REQUESTS` (4000), `CONCURRENCY` (16), `WARMUP` (300), `RATES` ("300 600 900 1200 1500"), `DURATION` (20 s per rate), `PIN` (`auto`: on with 8+ CPUs), `SKIP` (e.g. `SKIP=correctness`).
+Knobs, all environment variables: `ROUNDS` (5), `REQUESTS` (4000), `CONCURRENCY` (16), `WARMUP` (300), `RATES` ("300 600 900 1200 1500"), `DURATION` (20 s per rate), `STEP_GAP` (60 s between rates), `PIN` (`auto`: on with 8+ CPUs), `SKIP` (e.g. `SKIP=correctness,overhead` for the sweep alone).
 
-The open-loop sweep needs a load generator faster than the server: on an 8-vCPU guest its two vCPUs fell behind from 900 req/s, so give the machine more vCPUs (the load generator gets a quarter of them) before reading the sweep as server capacity.
+Every request opens a new connection, and closed connections hold their source port in TIME_WAIT for 60 s, so the default 28k-port range caps new connections to one destination near 470/s. `measure.sh` therefore widens `net.ipv4.ip_local_port_range` to 1024–65535 and sets `net.ipv4.tcp_tw_reuse=1`, on the machine (restored on exit) and in the frontend container, and waits `STEP_GAP` between rates. Do not run it on a host whose services bind ports in that range. The open-loop load generator runs one process per load-generator CPU.
+
+The open-loop sweep needs a load generator faster than the server. Check the `late starts` column: if requests started late while errors stayed at zero, the load generator was the limit. 16 vCPUs give it four processes.
 
 Compare agent off and agent on within one run only; a VM adds its own virtualization overhead, so its absolute numbers are not comparable with bare-metal ones.
