@@ -45,20 +45,23 @@ Earlier versions of this README reported a concurrent residue (136–156/200 on 
 
 ### Overhead
 
-`demo/run_overhead.sh` drives `/direct` and `/hop` in turn at concurrency 16 (4000 requests each after a 300-request warm-up, Netty NIO) with and without the agent, and records latency percentiles, the frontend JVM's CPU time during the load and the `ioctl` syscalls it made. Two rounds:
+Measured with `vm/measure.sh` on a dedicated 8-vCPU KVM guest (Ubuntu 24.04, kernel 6.8) with the frontend, the backend side and the load generator on separate vCPUs. `demo/run_overhead.sh` drives `/direct` and `/hop` at concurrency 16, 4000 requests each after a 300-request warm-up, agent off and on, five rounds in alternating order. Median (min–max) over the rounds:
 
-| endpoint, round | p50 off → on | p99 off → on | req/s off → on | JVM CPU (cores) off → on | ioctl per request off → on |
-|---|---|---|---|---|---|
-| `/direct`, 1 | 23.8 → 24.0 ms | 39.3 → 46.6 ms | 648 → 628 | 5.08 → 5.78 | 7.0 → 76.0 |
-| `/direct`, 2 | 23.6 → 24.0 ms | 40.9 → 50.1 ms | 651 → 617 | 5.41 → 5.65 | 7.0 → 76.1 |
-| `/hop`, 1 | 53.3 → 53.0 ms | 60.8 → 59.7 ms | 295 → 298 | 1.80 → 1.81 | 7.0 → 87.6 |
-| `/hop`, 2 | 52.8 → 53.0 ms | 56.8 → 58.2 ms | 301 → 295 | 1.70 → 1.79 | 7.0 → 87.5 |
+| | `/direct` off → on | `/hop` off → on |
+|---|---|---|
+| p50 latency | 24.16 → 24.61 ms | 55.64 → 56.04 ms |
+| p99 latency | 42.0 → 50.0 ms | 77.1 → 113.3 ms (91–163) |
+| throughput | 603 → 589 req/s | 277 → 270 req/s |
+| JVM CPU per request | 3.82 → 4.15 ms (4.04–4.33) | 5.81 → 6.41 ms (6.02–6.64) |
+| `ioctl` per request | 7.0 → 77 | 7.0 → 85 |
 
-On `/direct` the agent costs about 0.3 ms at p50, 7–9 ms at p99 and 3–5% of throughput, in the same direction in both rounds; on `/hop` the difference is within noise. The agent adds 69–81 `ioctl` calls per request (two per task `run()`), each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The load is closed-loop at concurrency 16 and latency is dominated by the backend's 20 ms `delay`, so this setup only shows effects larger than roughly a millisecond. The 7 per request without the agent come from OBI's own injected Java agent: with OBI stopped the count is 0, and JFR shows them in `io.opentelemetry.obi.java.Agent$NativeLib.ioctl`.
+The agent costs about 9–10% more JVM CPU per request, 2–3% of throughput and 0.4 ms at p50; for CPU and throughput the rounds' ranges do not overlap. p99 grows more, and on `/hop` it also varies more between rounds. The extra `ioctl` calls are two per task `run()`, each a syscall that OBI's kprobe consumes at entry and the kernel then rejects. The 7 per request without the agent come from OBI's own injected Java agent: with OBI stopped the count is 0, and JFR shows them in `io.opentelemetry.obi.java.Agent$NativeLib.ioctl`. The load is closed-loop and latency is dominated by the backend's 20 ms `delay`, so sub-millisecond latency effects stay hidden; CPU per request is the more sensitive figure.
 
-The absolute CPU (5–10 ms per `/direct` request, with or without OBI) is mostly kotlinx.coroutines' scheduler hunting for work: `WorkQueue.tryStealLastScheduled` is 29% of JFR's Java samples, and native time is Netty's `epoll_wait`. That spinning varies with load, and the test host was shared with other busy workloads, so CPU deltas of a few percent are not meaningful here. A saturation (open-loop) comparison was not run for the same reason.
+An open-loop sweep on `/direct` served 300 and 600 req/s without errors both with and without the agent. From 900 req/s both collapsed alike, and the load generator's two vCPUs were already falling behind its schedule, so that setup does not show where the agent starts to cost capacity. The run's full summary and raw rows are in `demo/reference-results/vm-20260924-*`.
 
-To repeat these measurements on a quiet machine, including the open-loop comparison, see [`vm/README.md`](vm/README.md).
+On the shared workstation used for the rest of this README, the same comparison could not resolve CPU differences: CPU per request was 5–10 ms with or without OBI, mostly kotlinx.coroutines' scheduler hunting for work (`WorkQueue.tryStealLastScheduled`, 29% of JFR's Java samples) on 32 frontend cores, and other workloads were competing for the host.
+
+To repeat these measurements, see [`vm/README.md`](vm/README.md).
 
 ## Reproduction
 
