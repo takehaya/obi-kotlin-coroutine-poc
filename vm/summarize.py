@@ -99,10 +99,10 @@ ol = R / "openloop.tsv"
 if ol.exists():
     rows = list(csv.DictReader(ol.open(), delimiter="\t"))
     print("## Open-loop /direct\n")
-    print("| target req/s | label | achieved req/s | errors | p50 ms | p99 ms | CPU ms / request | late starts |")
-    print("|---|---|---|---|---|---|---|---|")
+    print("| target req/s | label | achieved req/s | errors | p50 ms | p99 ms | CPU ms / request | late starts | error kinds |")
+    print("|---|---|---|---|---|---|---|---|---|")
     for r in sorted(rows, key=lambda r: (float(r["target_rps"]), r["label"])):
-        print(f"| {r['target_rps']} | {r['label']} | {r['rps']} | {r['errors']} | {r['p50_ms']} | {r['p99_ms']} | {r['cpu_ms_per_req']} | {r.get('late_starts', '-')} |")
+        print(f"| {r['target_rps']} | {r['label']} | {r['rps']} | {r['errors']} | {r['p50_ms']} | {r['p99_ms']} | {r['cpu_ms_per_req']} | {r.get('late_starts', '-')} | {r.get('error_kinds', '-')} |")
     print()
     late = [r for r in rows if int(r.get("late_starts") or 0) > 0.01 * int(r["requests"])]
     if late:

@@ -15,22 +15,28 @@ import json
 import sys
 import threading
 import time
+import collections
+import multiprocessing
+import urllib.error
 import urllib.request
 
 TIMEOUT = 10
 
 
 def fetch(url):
-    """Returns the wall time of one request in seconds, or None if it failed."""
+    """Returns (wall time of one request in seconds or None if it failed, failure kind)."""
     t0 = time.perf_counter()
     try:
         with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
             r.read()
             if not 200 <= r.status < 300:
-                return None
-    except Exception:
-        return None
-    return time.perf_counter() - t0
+                return None, f"http {r.status}"
+    except urllib.error.HTTPError as e:
+        return None, f"http {e.code}"
+    except Exception as e:
+        reason = getattr(e, "reason", None)
+        return None, type(reason if isinstance(reason, BaseException) else e).__name__
+    return time.perf_counter() - t0, None
 
 
 def run(url, requests, concurrency):
@@ -44,7 +50,7 @@ def run(url, requests, concurrency):
     def worker(i):
         latencies, errors = slots[i][0], 0
         for _ in range(i, requests, concurrency):
-            d = fetch(url)
+            d, _ = fetch(url)
             if d is None:
                 errors += 1
             else:
@@ -68,34 +74,39 @@ def pct(latencies, q):
     return latencies[min(len(latencies) - 1, int(q * len(latencies)))] * 1000
 
 
-def run_open_loop(url, rate, duration, workers):
-    """Issues rate req/s for duration seconds. Returns (sorted latencies, errors, sent, wall)."""
+def run_open_loop(url, rate, duration, workers, t0, offset=0.0):
+    """Issues rate req/s for duration seconds starting at monotonic time t0 + offset.
+
+    Returns (latencies, errors by kind, sent, late starts).
+    """
     total = int(rate * duration)
     interval = 1.0 / rate
-    latencies, errors, late = [], [0], [0]
+    latencies, errors, late = [], collections.Counter(), [0]
     lock = threading.Lock()
 
     def one(due):
-        now = time.perf_counter()
+        now = time.monotonic()
         if due > now:
             time.sleep(due - now)
         elif now - due > 0.005:
             with lock:
-                late[0] += 1  # the load generator itself fell behind its schedule
-        d = fetch(url)
-        end = time.perf_counter()
+                late[0] += 1  # started late: out of CPU, or all in-flight slots busy
+        d, kind = fetch(url)
+        end = time.monotonic()
         with lock:
             if d is None:
-                errors[0] += 1
+                errors[kind] += 1
             else:
                 latencies.append(end - due)
 
-    t0 = time.perf_counter() + 0.1
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         for i in range(total):
-            pool.submit(one, t0 + i * interval)
-    wall = time.perf_counter() - t0
-    return sorted(latencies), errors[0], total, wall, late[0]
+            pool.submit(one, t0 + offset + i * interval)
+    return latencies, errors, total, late[0]
+
+
+def _open_loop_proc(args):
+    return run_open_loop(*args)
 
 
 def main():
@@ -107,10 +118,24 @@ def main():
     p.add_argument("--rate", type=float, help="open loop: requests per second")
     p.add_argument("--duration", type=float, default=20, help="open loop: seconds")
     p.add_argument("--workers", type=int, default=512, help="open loop: max requests in flight")
+    p.add_argument("--procs", type=int, default=1,
+                   help="open loop: processes sharing the rate (one Python process tops out near one core)")
     a = p.parse_args()
 
     if a.rate:
-        latencies, errors, sent, wall, late = run_open_loop(a.url, a.rate, a.duration, a.workers)
+        procs = max(1, a.procs)
+        t0 = time.monotonic() + 0.5
+        # Each process takes rate/procs, its schedule shifted so the arrivals interleave.
+        jobs = [(a.url, a.rate / procs, a.duration, max(1, a.workers // procs), t0, i / a.rate)
+                for i in range(procs)]
+        with multiprocessing.Pool(procs) as pool:
+            parts = pool.map(_open_loop_proc, jobs)
+        wall = time.monotonic() - t0
+        latencies = sorted(x for part in parts for x in part[0])
+        kinds = sum((part[1] for part in parts), collections.Counter())
+        errors = sum(kinds.values())
+        sent = sum(part[2] for part in parts)
+        late = sum(part[3] for part in parts)
         print(json.dumps({
             "mode": "open",
             "target_rps": a.rate,
@@ -122,6 +147,8 @@ def main():
             "mean_ms": round(sum(latencies) / len(latencies) * 1000, 3) if latencies else 0.0,
             "rps": round((sent - errors) / wall, 1) if wall else 0.0,
             "late_starts": late,
+            "procs": procs,
+            "error_kinds": dict(kinds.most_common(3)),
         }))
         return 1 if errors > sent * 0.01 else 0
 
