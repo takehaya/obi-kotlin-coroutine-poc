@@ -1,8 +1,6 @@
 package obicoro;
 
 import java.lang.reflect.Field;
-import java.util.Collections;
-import java.util.Map;
 import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -41,10 +39,51 @@ public final class Track {
    * not override them with value semantics. Verified for kotlinx-coroutines 1.10.2 and Ktor 3.2.2:
    * no Runnable in those jars declares equals(Object) or hashCode().
    */
-  // ponytail: global lock on every stamp/run; shard or use a ConcurrentHashMap<WeakKey,..> with a
-  // ReferenceQueue if it shows up in profiles
-  private static final Map<Object, Long> pendingId =
-      Collections.synchronizedMap(new WeakHashMap<Object, Long>());
+  private static final WeakIds pendingId = new WeakIds();
+
+  /**
+   * Object -> id with weak keys, split into stripes by identity hash. One synchronized map for all
+   * tasks was taken on every task construction and run; at 2000 req/s JFR showed threads blocked
+   * on it for over 10 ms more than 1,500 times in 20 s, which is what stretched the latency tail.
+   */
+  static final class WeakIds {
+    private static final int STRIPES = 64;
+
+    @SuppressWarnings("unchecked")
+    private final WeakHashMap<Object, Long>[] stripes = new WeakHashMap[STRIPES];
+
+    WeakIds() {
+      for (int i = 0; i < STRIPES; i++) {
+        stripes[i] = new WeakHashMap<>();
+      }
+    }
+
+    private WeakHashMap<Object, Long> stripe(Object key) {
+      return stripes[System.identityHashCode(key) & (STRIPES - 1)];
+    }
+
+    Long get(Object key) {
+      WeakHashMap<Object, Long> m = stripe(key);
+      synchronized (m) {
+        return m.get(key);
+      }
+    }
+
+    void put(Object key, long id) {
+      WeakHashMap<Object, Long> m = stripe(key);
+      synchronized (m) {
+        m.put(key, id);
+      }
+    }
+
+    /** The key's id, assigning the next connection number on first sight. */
+    long computeIfAbsent(Object key) {
+      WeakHashMap<Object, Long> m = stripe(key);
+      synchronized (m) {
+        return m.computeIfAbsent(key, k -> nextConnectionId());
+      }
+    }
+  }
 
   /** Current lineage id per thread. 0 = none. */
   private static final ThreadLocal<long[]> activeId = ThreadLocal.withInitial(() -> new long[1]);
@@ -75,15 +114,14 @@ public final class Track {
 
   /** The 31-bit logical id of a connection object (the BPF side uses the low 31 bits). */
   private static long channelId(Object o) {
-    return connectionIds.computeIfAbsent(o, k -> nextConnectionId());
+    return connectionIds.computeIfAbsent(o);
   }
 
   /**
    * connection object -> sequential id. Identity hashes can collide between two live connections;
    * a counter cannot until 2^31 connections, far past any two being in flight at once.
    */
-  private static final Map<Object, Long> connectionIds =
-      Collections.synchronizedMap(new WeakHashMap<Object, Long>());
+  private static final WeakIds connectionIds = new WeakIds();
 
   private static final AtomicInteger connectionSeq = new AtomicInteger();
 
@@ -142,8 +180,7 @@ public final class Track {
    * byte channel -> lineage id of the socket it was attached to, so the CIO server can recover the
    * connection's id when it starts the request pipeline (see scopeEnterConnection).
    */
-  private static final Map<Object, Long> channelLineage =
-      Collections.synchronizedMap(new WeakHashMap<Object, Long>());
+  private static final WeakIds channelLineage = new WeakIds();
 
   /**
    * ktor-network socket attach with preserve-or-seed. Returns the previous id. The attached channel
