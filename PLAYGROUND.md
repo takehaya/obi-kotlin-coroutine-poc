@@ -13,8 +13,8 @@ All commands run from the repository root through the [Makefile](Makefile), whic
 - `sudo`: the stack is started with `sudo -E docker compose`, and the OBI container runs privileged with `pid: host` and host networking, because it loads eBPF programs into your kernel.
 - Free host ports: 8080 (frontend), 8082 (jfront), 16686 (Jaeger UI), 4318 (OTLP).
 
-OBI is pinned to `v0.10.0`.
-The agent talks to OBI through that version's ioctl ABI, so don't bump the image tag and expect the agent half of this walkthrough to keep working.
+OBI is pinned to `v1.0.0`. The agent also works with `v0.10.0`; both use the same virtual-thread mount ioctl.
+The agent talks to OBI through that ioctl ABI, which is not a public compatibility promise, so re-check the agent half of this walkthrough after bumping the image tag.
 
 ## 1. Build everything
 

@@ -22,23 +22,23 @@ check-hooks:
 
 # Start the stack with the coroutine agent attached to the frontend.
 up:
-	cd demo && FRONTEND_JAVA_OPTS="$(AGENT_OPTS)" sudo -E docker compose up -d
+	cd demo && sudo -E FRONTEND_JAVA_OPTS="$(AGENT_OPTS)" docker compose up -d
 
 # Start the stack without the agent: reproduces the baseline (split traces).
 up-baseline:
-	cd demo && FRONTEND_JAVA_OPTS="" sudo -E docker compose up -d
+	cd demo && sudo -E FRONTEND_JAVA_OPTS="" docker compose up -d
 
 # Variant: frontend on the CIO server engine instead of Netty.
 up-cio:
-	cd demo && FRONTEND_JAVA_OPTS="$(AGENT_OPTS)" KTOR_ENGINE=cio sudo -E docker compose up -d --force-recreate
+	cd demo && sudo -E FRONTEND_JAVA_OPTS="$(AGENT_OPTS)" KTOR_ENGINE=cio docker compose up -d --force-recreate
 
 # Variant: Netty on the native epoll transport instead of NIO.
 up-epoll:
-	cd demo && FRONTEND_JAVA_OPTS="$(AGENT_OPTS)" NETTY_TRANSPORT=epoll sudo -E docker compose up -d --force-recreate
+	cd demo && sudo -E FRONTEND_JAVA_OPTS="$(AGENT_OPTS)" NETTY_TRANSPORT=epoll docker compose up -d --force-recreate
 
 # Variant: control service on a virtual-thread-per-task executor.
 up-vt:
-	cd demo && FRONTEND_JAVA_OPTS="$(AGENT_OPTS)" JFRONT_EXECUTOR=virtual sudo -E docker compose up -d --force-recreate
+	cd demo && sudo -E FRONTEND_JAVA_OPTS="$(AGENT_OPTS)" JFRONT_EXECUTOR=virtual docker compose up -d --force-recreate
 
 # Drive the four sequential conditions and fetch traces from the Jaeger API.
 load:
