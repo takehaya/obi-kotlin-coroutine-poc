@@ -30,12 +30,13 @@ Variants are switched with an environment variable on the `up` line (e.g. `sudo 
 - `JFRONT_EXECUTOR=virtual` — plain-Java control service on a JDK 21 virtual-thread-per-task executor (`make up-vt`).
 - `BACKEND_TLS=1 BACKEND_URL=https://backend:8443 CLIENT_ENGINE=okhttp` — HTTPS from the frontend to the backend (self-signed certificate).
 - `CLIENT_ENGINE=okhttp` or `java` — the frontend's backend client (CIO by default); `CLIENT_POOL=<n>` turns on CIO pipelining over n connections; `BACKEND_ENGINE=cio` switches the backend's server engine.
+- `JRE_IMAGE=eclipse-temurin:25-jre` — the JVM the three services run on (JDK 21 by default; the jars are still built with JDK 21).
 - `OBICORO_DEBUG=1` — agent debug logging, see below.
 
 The load and analysis steps have shortcuts too: `make load RESULTS=<dir>` / `make analyze RESULTS=<dir>`, and `make load-concurrent` / `make analyze-concurrent`.
 
 Overhead measurement: see [overhead.md](overhead.md).
 
-`make check-hooks` (also run in CI) starts the frontend with the agent on the NIO, epoll and CIO setups without Docker or OBI, and fails if a class the agent depends on is no longer transformed or a transformation error appears.
+`make check-hooks` (run in CI on JDK 21 and JDK 25) starts the frontend with the agent on the NIO, epoll and CIO setups without Docker or OBI, and fails if a class the agent depends on is no longer transformed or a transformation error appears.
 
 Traces are also browsable in the Jaeger UI at http://localhost:16686 (compare service `frontend` with the control `jfront`). The port is bound to 127.0.0.1; from another machine, use `ssh -L 16686:localhost:16686 <host>`. `OBICORO_DEBUG=1` makes the agent log mounts/stamps to stderr, plus one `transformed <class>` line for every class it instruments (useful to check a hook still matches after a Netty/Ktor upgrade). Transformation errors are always logged, with or without the variable.
