@@ -13,7 +13,8 @@ services:
     networks: [expnet]
 
   backend:
-    image: eclipse-temurin:21-jre
+    # JRE_IMAGE switches the JVM the three services run on, e.g. JRE_IMAGE=eclipse-temurin:25-jre.
+    image: "${JRE_IMAGE:-eclipse-temurin:21-jre}"
     environment:
       # BACKEND_ENGINE=cio switches the backend server engine from Netty to CIO.
       BACKEND_ENGINE: "${BACKEND_ENGINE:-}"
@@ -26,7 +27,7 @@ services:
     networks: [expnet]
 
   frontend:
-    image: eclipse-temurin:21-jre
+    image: "${JRE_IMAGE:-eclipse-temurin:21-jre}"
     environment:
       BACKEND_URL: "${BACKEND_URL:-http://backend:8081}"
       # Attach the coroutine agent by setting FRONTEND_JAVA_OPTS, e.g.:
@@ -51,7 +52,7 @@ services:
     networks: [expnet]
 
   jfront:
-    image: eclipse-temurin:21-jre
+    image: "${JRE_IMAGE:-eclipse-temurin:21-jre}"
     environment:
       BACKEND_URL: http://backend:8081
       # JFRONT_EXECUTOR=virtual switches to a virtual-thread-per-task executor

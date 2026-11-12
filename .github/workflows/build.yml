@@ -10,10 +10,16 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          # The last version listed is the default JAVA_HOME; the build uses 21.
+          java-version: |
+            25
+            21
           cache: gradle
       - run: ./build.sh
       - run: demo/check_hooks.sh
+      # The agent must also load on the current LTS: an outdated Byte Buddy fails every hook there.
+      - name: Hook check on JDK 25
+        run: JAVA_HOME="$JAVA_HOME_25_X64" demo/check_hooks.sh
       - uses: actions/upload-artifact@v4
         with:
           name: coroagent

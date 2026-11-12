@@ -7,7 +7,7 @@ repositories {
 }
 
 dependencies {
-    implementation("net.bytebuddy:byte-buddy:1.15.11")
+    implementation("net.bytebuddy:byte-buddy:1.18.17")
 }
 
 java {
