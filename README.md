@@ -8,6 +8,8 @@ Try it in about 10 minutes (Linux with Docker, JDK 21, gcc):
 4. `make down && make up`, wait 30 seconds, then `curl localhost:8080/direct` again
 5. Refresh Jaeger: the request is now **one** trace, from the frontend through the backend
 
+The ports are bound to 127.0.0.1. If Docker runs on another machine, forward them first: `ssh -L 16686:localhost:16686 -L 8080:localhost:8080 <host>`.
+
 [PLAYGROUND.md](PLAYGROUND.md) is the guided version of these steps.
 
 ## What this shows

@@ -38,4 +38,4 @@ Overhead measurement: see [overhead.md](overhead.md).
 
 `make check-hooks` (also run in CI) starts the frontend with the agent on the NIO, epoll and CIO setups without Docker or OBI, and fails if a class the agent depends on is no longer transformed or a transformation error appears.
 
-Traces are also browsable in the Jaeger UI at http://localhost:16686 (compare service `frontend` with the control `jfront`). `OBICORO_DEBUG=1` makes the agent log mounts/stamps to stderr, plus one `transformed <class>` line for every class it instruments (useful to check a hook still matches after a Netty/Ktor upgrade). Transformation errors are always logged, with or without the variable.
+Traces are also browsable in the Jaeger UI at http://localhost:16686 (compare service `frontend` with the control `jfront`). The port is bound to 127.0.0.1; from another machine, use `ssh -L 16686:localhost:16686 <host>`. `OBICORO_DEBUG=1` makes the agent log mounts/stamps to stderr, plus one `transformed <class>` line for every class it instruments (useful to check a hook still matches after a Netty/Ktor upgrade). Transformation errors are always logged, with or without the variable.

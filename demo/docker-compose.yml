@@ -3,9 +3,13 @@ services:
     # Pinned like OBI below, so the walkthrough still reproduces months from now
     # (Jaeger 2.x all-in-one changed the query API the analysis scripts use).
     image: jaegertracing/all-in-one:1.76.0
+    # Every published port binds to 127.0.0.1 only: this is an unauthenticated demo, and a
+    # port published on all interfaces is reachable from outside the host (scanners found
+    # 8080 within minutes). From another machine, forward the ports over SSH instead:
+    #   ssh -L 16686:localhost:16686 -L 8080:localhost:8080 <host>
     ports:
-      - "16686:16686"   # UI / API
-      - "4318:4318"     # OTLP HTTP (OBI reaches it from the host network)
+      - "127.0.0.1:16686:16686"   # UI / API
+      - "127.0.0.1:4318:4318"     # OTLP HTTP (OBI reaches it from the host network)
     networks: [expnet]
 
   backend:
@@ -43,7 +47,7 @@ services:
       - ../agent/dist:/coroagent:ro
     command: ["/app/bin/frontend"]
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks: [expnet]
 
   jfront:
@@ -56,7 +60,7 @@ services:
       - ./jfront/build/install/jfront:/app:ro
     command: ["/app/bin/jfront"]
     ports:
-      - "8082:8082"
+      - "127.0.0.1:8082:8082"
     networks: [expnet]
 
   obi:
