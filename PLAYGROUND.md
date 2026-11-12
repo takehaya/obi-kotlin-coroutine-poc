@@ -11,7 +11,8 @@ All commands run from the repository root through the [Makefile](Makefile), whic
 - Docker with the compose v2 plugin.
 - JDK 21 (with JNI headers), gcc, python3, curl.
 - `sudo`: the stack is started with `sudo -E docker compose`, and the OBI container runs privileged with `pid: host` and host networking, because it loads eBPF programs into your kernel.
-- Free host ports: 8080 (frontend), 8082 (jfront), 16686 (Jaeger UI), 4318 (OTLP).
+- Free host ports: 8080 (frontend), 8082 (jfront), 16686 (Jaeger UI), 4318 (OTLP). They are published on 127.0.0.1 only, so nothing is exposed outside the host.
+- If the host is remote, forward the ports you need over SSH and use `localhost` as written below: `ssh -L 16686:localhost:16686 -L 8080:localhost:8080 <host>`.
 
 OBI is pinned to `v1.0.0`. The agent also works with `v0.10.0`; both use the same virtual-thread mount ioctl.
 The agent talks to OBI through that ioctl ABI, which is not a public compatibility promise, so re-check the agent half of this walkthrough after bumping the image tag.
