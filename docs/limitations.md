@@ -1,0 +1,13 @@
+# Known limitations
+
+This is a proof of concept, not a production agent.
+
+- Requests that genuinely share a connection concurrently (HTTP pipelining, HTTP/2 streams) are unmeasured. A per-thread mount names one request at a time, so a single `run()` that serves several requests at once cannot be attributed; this is the case the upstream proposal (state keyed by logical task) is for. The demo could not exercise it: CIO client pipelining (`CLIENT_POOL=4`) fails for most requests even without OBI or the agent, against a Netty backend (78 of 100 returned 500) and a CIO backend (`BACKEND_ENGINE=cio`, 49 returned 500 and 18 timed out).
+- A coroutine carries the id of the request it was launched in. A long-lived coroutine launched inside one request and later reused by others keeps the first request's id; `/shared` (an app-scoped worker started by the first request) reproduces this: its client spans lose their parent, 0/10 (1/10 on OBI v1.0.0, where the first request, the one that started the worker, connects).
+- Backend clients: Ktor CIO and OkHttp are covered. The JDK's `HttpClient` (Ktor's Java engine) is not: it writes from its own selector thread inside `java.net.http`, and every request splits.
+- Scope hooks cover Ktor's Netty and CIO engines and the CIO client. On Netty only the NIO and epoll transports are hooked; io_uring and KQueue are not. Other engines/clients/transports need their own scope hooks.
+- Tied to OBI's virtual-thread mount ioctl ABI (verified on v0.10.0 and v1.0.0; not a public compatibility promise).
+- TLS: with HTTPS from the frontend to the backend (OkHttp, JSSE), the agent's in-process correlation holds (`/direct`, `/hop` 10/10; on `/parallel` 19 of 20 client spans sit under their server span). OBI's cross-service link over TLS is less reliable: 10 of those 19 reached the backend's span, and 13 of 20 did without the agent. Ktor's CIO client uses its own TLS rather than JSSE and was not tried. HTTP/2 and gRPC are untested.
+- Only Ktor has been exercised. Spring WebFlux with coroutines and other coroutine-based stacks are untested.
+- The JNI shim is compiled on the host for x86_64 glibc; other architectures or musl-based images need a rebuild.
+- The agent writes the same `java_vt_threads` entry as OBI's own virtual-thread instrumentation. `/vt` (coroutines dispatched onto virtual threads) connects fully, but its socket I/O runs on Ktor's I/O coroutines, not on the virtual threads, so a case where both write the same carrier at the moment of a send has not been exercised.
