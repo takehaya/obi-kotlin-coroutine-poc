@@ -8,7 +8,7 @@ This repo is the reproduction companion for an upstream proposal to add first-cl
 
 OBI associates a service's incoming request with its outgoing calls through thread identity (plus clone-chain lookups, `Executor` instrumentation in its embedded Java agent, and virtual-thread mount tracking since v0.10.0). Kotlin coroutines fall through all of these paths: `kotlinx.coroutines` dispatches work through its own scheduler, and a request's identity lives in heap `Continuation` objects rather than in any thread.
 
-The result, measured with the demo in this repo (OBI v0.10.0, Ktor 3.2.2, plaintext HTTP):
+The result, measured with the demo in this repo (OBI v0.10.0, Ktor 3.2.2, plaintext HTTP; re-measured with OBI v1.0.0 on 2026-11-12 with the same outcome, see [`demo/reference-results/obi-v1.0.0/`](demo/reference-results/obi-v1.0.0/)):
 
 - Every request through the coroutine-based frontend splits into two traces: an orphaned server span, and a separate trace holding the client span + the downstream service. 30/30 requests split across three endpoint shapes — including `/direct`, which contains no user-written suspension at all.
 - A thread-per-request plain-Java control service on the same topology connects 10/10.
@@ -88,7 +88,7 @@ Prefer a guided tour? [PLAYGROUND.md](PLAYGROUND.md) walks through a 10-minute b
 #    Without FRONTEND_JAVA_OPTS you get the baseline (split traces).
 cd demo
 AGENT="-javaagent:/coroagent/coroagent.jar -Dobicoro.native=/coroagent/libcoroagent.so"
-FRONTEND_JAVA_OPTS="$AGENT" sudo -E docker compose up -d
+sudo -E FRONTEND_JAVA_OPTS="$AGENT" docker compose up -d   # pass the variable as a sudo argument; some sudo builds (sudo-rs) drop it otherwise
 
 # 3. Drive the four conditions and summarize trace compositions from the Jaeger API
 ./run_conditions.sh
@@ -99,7 +99,7 @@ python3 analyze_jaeger.py results
 python3 analyze_concurrent.py results-concurrent
 ```
 
-Variants are switched with an environment variable on the `up` line (e.g. `KTOR_ENGINE=cio FRONTEND_JAVA_OPTS="$AGENT" sudo -E docker compose up -d --force-recreate`), or with the `make` shortcut, which re-creates the stack with the agent attached:
+Variants are switched with an environment variable on the `up` line (e.g. `sudo -E KTOR_ENGINE=cio FRONTEND_JAVA_OPTS="$AGENT" docker compose up -d --force-recreate`), or with the `make` shortcut, which re-creates the stack with the agent attached:
 
 - `KTOR_ENGINE=cio` — frontend server engine, Netty by default (`make up-cio`).
 - `NETTY_TRANSPORT=epoll` — Netty's native epoll transport, NIO by default (`make up-epoll`).
@@ -128,10 +128,10 @@ demo/    4-service topology (compose), OBI config, load & analysis scripts
 This is a proof of concept, not a production agent.
 
 - Requests that genuinely share a connection concurrently (HTTP pipelining, HTTP/2 streams) are unmeasured. A per-thread mount names one request at a time, so a single `run()` that serves several requests at once cannot be attributed; this is the case the upstream proposal (state keyed by logical task) is for. The demo could not exercise it: CIO client pipelining (`CLIENT_POOL=4`) fails for most requests even without OBI or the agent, against a Netty backend (78 of 100 returned 500) and a CIO backend (`BACKEND_ENGINE=cio`, 49 returned 500 and 18 timed out).
-- A coroutine carries the id of the request it was launched in. A long-lived coroutine launched inside one request and later reused by others keeps the first request's id; `/shared` (an app-scoped worker started by the first request) reproduces this: its client spans lose their parent, 0/10.
+- A coroutine carries the id of the request it was launched in. A long-lived coroutine launched inside one request and later reused by others keeps the first request's id; `/shared` (an app-scoped worker started by the first request) reproduces this: its client spans lose their parent, 0/10 (1/10 on OBI v1.0.0, where the first request, the one that started the worker, connects).
 - Backend clients: Ktor CIO and OkHttp are covered. The JDK's `HttpClient` (Ktor's Java engine) is not: it writes from its own selector thread inside `java.net.http`, and every request splits.
 - Scope hooks cover Ktor's Netty and CIO engines and the CIO client. On Netty only the NIO and epoll transports are hooked; io_uring and KQueue are not. Other engines/clients/transports need their own scope hooks.
-- Tied to OBI v0.10.0's ioctl ABI.
+- Tied to OBI's virtual-thread mount ioctl ABI (verified on v0.10.0 and v1.0.0; not a public compatibility promise).
 - TLS: with HTTPS from the frontend to the backend (OkHttp, JSSE), the agent's in-process correlation holds (`/direct`, `/hop` 10/10; on `/parallel` 19 of 20 client spans sit under their server span). OBI's cross-service link over TLS is less reliable: 10 of those 19 reached the backend's span, and 13 of 20 did without the agent. Ktor's CIO client uses its own TLS rather than JSSE and was not tried. HTTP/2 and gRPC are untested.
 - Only Ktor has been exercised. Spring WebFlux with coroutines and other coroutine-based stacks are untested.
 - The JNI shim is compiled on the host for x86_64 glibc; other architectures or musl-based images need a rebuild.

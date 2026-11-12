@@ -1,0 +1,5 @@
+
+===== condition: shared =====
+    9 traces: ['backend/server:GET /work', 'frontend/client:GET /work']
+    9 traces: ['frontend/internal:in queue', 'frontend/internal:processing', 'frontend/server:GET /shared']
+    1 traces: ['backend/server:GET /work', 'frontend/client:GET /work', 'frontend/internal:in queue', 'frontend/internal:processing', 'frontend/server:GET /shared']

@@ -1,5 +1,5 @@
-# OBI v0.10.0 configuration.
-# Reference: devdocs/config/CONFIG.md at the v0.10.0 tag.
+# OBI configuration (used with v1.0.0; the same file works with v0.10.0).
+# Reference: devdocs/config/CONFIG.md at the v1.0.0 tag.
 discovery:
   instrument:
     - open_ports: 8080

@@ -60,12 +60,17 @@ services:
     networks: [expnet]
 
   obi:
-    image: otel/ebpf-instrument:v0.10.0
+    image: otel/ebpf-instrument:v1.0.0
     privileged: true
     pid: "host"
     network_mode: "host"   # attach TC in the host netns, reach Jaeger via localhost:4318
     volumes:
       - ./obi-config.yml:/config/obi-config.yml:ro
+      # OBI v1.0.0 attaches sys_enter/exit_ioctl tracepoints to compensate for a kernel FIONREAD bug
+      # (commit 929e30f93125, in 6.6.128+, 6.12.75+, 6.18.14+ and 6.19+). Tracepoint ids are read
+      # from tracefs, which a privileged container does not see by default; without it OBI turns
+      # context propagation off on affected kernels.
+      - /sys/kernel/tracing:/sys/kernel/tracing
     command: ["-config", "/config/obi-config.yml"]
 
 networks:
